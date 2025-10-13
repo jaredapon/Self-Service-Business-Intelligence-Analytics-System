@@ -24,6 +24,9 @@ except Exception as e:
 for file_path, label in rules_files:
     try:
         rules_df = pd.read_csv(file_path)
+        if rules_df.empty:
+            print(f"No association rules found in {file_path}.")
+            continue
         bundle_index = 0
         bundle = rules_df.iloc[bundle_index]
         product_a_name = bundle['antecedents_names']
@@ -41,6 +44,11 @@ for file_path, label in rules_files:
 
     product_a_id = product_a_match['product_id'].iloc[0]
     product_b_id = product_b_match['product_id'].iloc[0]
+    
+    # Get the latest price from the current product dimension
+    price_a = product_a_match['Price'].iloc[0]
+    price_b = product_b_match['Price'].iloc[0]
+    latest_bundle_price = price_a + price_b
 
     pair_transactions = fact_df[fact_df['Product ID'].isin([product_a_id, product_b_id])]
     receipt_products = pair_transactions.groupby('Receipt No')['Product ID'].apply(set)
@@ -72,29 +80,29 @@ for file_path, label in rules_files:
         y = demand_summary['Num_Transactions']
 
         degrees = [1, 2, 3]
-        r_squared_values = []
+        best_model = None
+        best_r2 = -np.inf
+        best_degree = 0
 
         for degree in degrees:
-            poly_model = make_pipeline(PolynomialFeatures(degree), LinearRegression())
-            poly_model.fit(X, y)
-            r_squared_values.append(poly_model.score(X, y))
-
-        best_degree_index = np.argmax(r_squared_values)
-        best_degree = degrees[best_degree_index]
-
-        best_model = make_pipeline(PolynomialFeatures(best_degree), LinearRegression())
-        best_model.fit(X, y)
+            model = make_pipeline(PolynomialFeatures(degree), LinearRegression())
+            model.fit(X, y)
+            r2 = model.score(X, y)
+            if r2 > best_r2:
+                best_r2 = r2
+                best_model = model
+                best_degree = degree
 
         y_pred = best_model.predict(X)
         mse = mean_squared_error(y, y_pred)
         rmse = np.sqrt(mse)
-        r2 = r2_score(y, y_pred)
-        wmape = np.sum(np.abs(y - y_pred)) / np.sum(y) * 100
+        wmape = np.sum(np.abs(y - y_pred)) / np.sum(np.abs(y)) * 100
+
         print(f"Model Evaluation for degree {best_degree}:")
-        print(f"  R²: {r2:.4f}")
+        print(f"  R²: {best_r2:.4f}")
         print(f"  MSE: {mse:.4f}")
         print(f"  RMSE: {rmse:.4f}")
-        print(f"  WMAPE: {wmape:.4f}")
+        print(f"  WMAPE: {wmape:.4f}%")
 
         min_price = demand_summary['Combined_AB_Price'].min()
         max_price = demand_summary['Combined_AB_Price'].max()
@@ -107,23 +115,56 @@ for file_path, label in rules_files:
         predicted_demand = best_model.predict(price_range_df)
 
         plt.figure(figsize=(10, 7))
-        plt.scatter(demand_summary['Combined_AB_Price'], demand_summary['Num_Transactions'], color='blue', s=50)
-        plt.plot(price_range_df, predicted_demand, color='red', linewidth=2)
+        plt.scatter(X, y, color='blue', s=50, label='Actual Data')
+        plt.plot(price_range_df, predicted_demand, color='red', linewidth=2, label=f'Polynomial Fit (degree={best_degree})')
 
         plt.xlim(extended_min, extended_max)
         plt.xlabel('Price (₱)', fontsize=12)
         plt.ylabel('Total Transactions', fontsize=12)
         plt.title(f'({label}) Polynomial Regression: {product_a_name} + {product_b_name} ', fontsize=14)
-
-        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.grid(True, which='both', linestyle='--', linewidth=0.5)
         plt.tight_layout()
 
-        # Save plot as image
         results_folder = "regression_results"
         os.makedirs(results_folder, exist_ok=True)
         plot_filename = f"pr_{label.lower()}_bundle_{bundle_index}.png"
         plot_path = os.path.join(results_folder, plot_filename)
         plt.savefig(plot_path)
         plt.show()
+
+        # --- Interactive "What-If" Analysis ---
+        print("\n--- Interactive Demand Prediction ---")
+        print(f"Reference: The current bundle price is ₱{latest_bundle_price:.2f}")
+        
+        # Predict demand at the latest price to use as a baseline
+        price_df = pd.DataFrame([[latest_bundle_price]], columns=['Combined_AB_Price'])
+        demand_at_latest_price = best_model.predict(price_df)[0]
+        print(f"Predicted transactions at this price: {demand_at_latest_price:.0f}")
+
+        while True:
+            try:
+                new_price_str = input("\nEnter a new price to predict demand (or press Enter to quit): ")
+                if not new_price_str:
+                    break
+                
+                new_price = float(new_price_str)
+                price_df = pd.DataFrame([[new_price]], columns=['Combined_AB_Price'])
+                predicted_demand_new = best_model.predict(price_df)[0]
+                
+                if demand_at_latest_price > 0:
+                    percent_change = ((predicted_demand_new - demand_at_latest_price) / demand_at_latest_price) * 100
+                    change_str = f", a change of {percent_change:+.2f}%"
+                else:
+                    change_str = " (percentage change cannot be calculated from zero baseline)."
+
+                print(f"-> If we set the price at ₱{new_price:.2f}, there will be ~{max(0, predicted_demand_new):.0f} transactions{change_str}")
+
+            except ValueError:
+                print("Invalid input. Please enter a number.")
+            except Exception as e:
+                print(f"An error occurred: {e}")
+                break
+
     else:
         print("Only one price point found. Cannot fit regression.")
