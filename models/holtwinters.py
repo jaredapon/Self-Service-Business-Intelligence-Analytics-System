@@ -9,10 +9,11 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 # USER CONFIGURATION
 # =========================
 # File paths
-RULES_PATH        = 'mba_meal/association_rules.csv'
+PARENT_DIR        = 'mba_meal'
+RULES_PATH        = PARENT_DIR + '/association_rules.csv'
 FACT_PATH         = 'etl_dimensions/fact_transaction_dimension.csv'
 PRODUCT_PATH      = 'etl_dimensions/current_product_dimension.csv'
-PED_SUMMARY_PATH  = 'ped_output/ped_summary.csv'   # <— from the standalone PED script
+PED_SUMMARY_PATH  = PARENT_DIR + '/ped_output/ped_summary.csv'   # <— from the standalone PED script
 
 # Bundle selection (row in association_rules.csv to analyze)
 BUNDLE_ROW = 5
