@@ -416,3 +416,58 @@ axes[2].grid(True)
 axes[2].legend(loc='best')
 
 plt.show()
+
+# =========================
+# MODEL EVALUATION METRICS
+# =========================
+print("\n--- MODEL EVALUATION METRICS (In-sample fit) ---")
+
+def evaluate_model(fitted_model, actual_series: pd.Series, label: str):
+    """Compute and print standard time-series forecast accuracy metrics."""
+    try:
+        fitted_vals = fitted_model.fittedvalues
+        actual_vals = actual_series.loc[fitted_vals.index].values
+
+        residuals = actual_vals - fitted_vals
+        mse = np.mean(residuals ** 2)
+        rmse = np.sqrt(mse)
+        mae = np.mean(np.abs(residuals))
+        wmape = np.sum(np.abs(residuals)) / np.sum(np.abs(actual_vals)) * 100 if np.sum(actual_vals) != 0 else np.nan
+        ss_res = np.sum(residuals ** 2)
+        ss_tot = np.sum((actual_vals - np.mean(actual_vals)) ** 2)
+
+        print(f"\n[{label}]")
+        print(f"  Mean Squared Error (MSE):       {mse:.4f}")
+        print(f"  Root Mean Squared Error (RMSE): {rmse:.4f}")
+        print(f"  Mean Absolute Error (MAE):      {mae:.4f}")
+        print(f"  Weighted MAPE (WMAPE):          {wmape:.2f}%")
+    except Exception as e:
+        print(f"[{label}] Evaluation skipped: {e}")
+
+# Refit models to get fitted values (since in your forecast code we only used fc)
+try:
+    hw_bundle = ExponentialSmoothing(
+        bundle_sales_ts, trend='add', seasonal='add',
+        seasonal_periods=SEASONAL_PERIODS, initialization_method="estimated"
+    ).fit(optimized=True)
+    evaluate_model(hw_bundle, bundle_sales_ts, f"Bundle ({product_a_name} + {product_b_name})")
+except Exception as e:
+    print(f"Bundle model evaluation failed: {e}")
+
+try:
+    hw_a = ExponentialSmoothing(
+        a_ts_all, trend='add', seasonal='add',
+        seasonal_periods=SEASONAL_PERIODS, initialization_method="estimated"
+    ).fit(optimized=True)
+    evaluate_model(hw_a, a_ts_all, f"{product_a_name} (Individual)")
+except Exception as e:
+    print(f"Product A model evaluation failed: {e}")
+
+try:
+    hw_b = ExponentialSmoothing(
+        b_ts_all, trend='add', seasonal='add',
+        seasonal_periods=SEASONAL_PERIODS, initialization_method="estimated"
+    ).fit(optimized=True)
+    evaluate_model(hw_b, b_ts_all, f"{product_b_name} (Individual)")
+except Exception as e:
+    print(f"Product B model evaluation failed: {e}")

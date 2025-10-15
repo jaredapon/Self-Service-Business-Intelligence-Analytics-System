@@ -385,3 +385,49 @@ axes[2].grid(True)
 axes[2].legend(loc='best')
 
 plt.show()
+
+# =========================
+# MODEL EVALUATION METRICS (SARIMA in-sample fit)
+# =========================
+print("\n--- MODEL EVALUATION METRICS (SARIMA in-sample fit) ---")
+
+def evaluate_sarima(series: pd.Series, order, seasonal_order, label: str):
+    """Fit SARIMA in-sample and compute accuracy metrics."""
+    try:
+        if series is None or series.empty:
+            print(f"[{label}] Skipped — no data.")
+            return
+
+        model = SARIMAX(series, order=order, seasonal_order=seasonal_order,
+                        enforce_stationarity=False, enforce_invertibility=False)
+        fitted = model.fit(disp=False)
+
+        actual_vals = series.values
+        fitted_vals = fitted.fittedvalues.values
+
+        # Align lengths
+        if len(fitted_vals) < len(actual_vals):
+            fitted_vals = np.pad(fitted_vals, (len(actual_vals) - len(fitted_vals), 0), mode='edge')
+
+        residuals = actual_vals - fitted_vals
+        mse = np.mean(residuals ** 2)
+        rmse = np.sqrt(mse)
+        mae = np.mean(np.abs(residuals))
+        wmape = np.sum(np.abs(residuals)) / np.sum(np.abs(actual_vals)) * 100 if np.sum(actual_vals) != 0 else np.nan
+        ss_res = np.sum(residuals ** 2)
+        ss_tot = np.sum((actual_vals - np.mean(actual_vals)) ** 2)
+
+        print(f"\n[{label}]")
+        print(f"  Mean Squared Error (MSE):       {mse:.4f}")
+        print(f"  Root Mean Squared Error (RMSE): {rmse:.4f}")
+        print(f"  Mean Absolute Error (MAE):      {mae:.4f}")
+        print(f"  Weighted MAPE (WMAPE):          {wmape:.2f}%")
+
+    except Exception as e:
+        print(f"[{label}] Evaluation failed: {e}")
+
+# Evaluate all relevant SARIMA fits
+evaluate_sarima(bundle_sales_ts, SARIMA_ORDER, SARIMA_SEASONAL_ORDER,
+                f"Bundle ({product_a_name} + {product_b_name})")
+evaluate_sarima(a_ts_all, SARIMA_ORDER, SARIMA_SEASONAL_ORDER, f"{product_a_name} (Individual)")
+evaluate_sarima(b_ts_all, SARIMA_ORDER, SARIMA_SEASONAL_ORDER, f"{product_b_name} (Individual)")
