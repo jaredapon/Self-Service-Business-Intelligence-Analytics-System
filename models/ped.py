@@ -12,11 +12,12 @@ from sklearn.metrics import r2_score
 # =========================
 # USER CONFIGURATION
 # =========================
-RULES_PATH   = 'mba_meal/association_rules.csv'
+SAVE_FOLDER = 'mba_meal'
+RULES_PATH   = SAVE_FOLDER + '/association_rules.csv'
 FACT_PATH    = 'etl_dimensions/fact_transaction_dimension.csv'
 PRODUCT_PATH = 'etl_dimensions/current_product_dimension.csv'
 TOP_N        = 15
-OUT_DIR      = 'ped_output'   # folder for CSV + plots
+OUT_DIR      = SAVE_FOLDER + '/ped_output'   # folder for CSV + plots
 
 # Toggle: use only receipts whose product set is EXACTLY {A, B} (no other items)
 STRICT_BUNDLE_ONLY = False
