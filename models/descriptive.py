@@ -26,7 +26,8 @@ ax.xaxis.set_minor_formatter(NullFormatter())
 ax.tick_params(axis='x', which='major', labelsize=10)
 ax.tick_params(axis='x', which='minor', labelbottom=False, length=4)
 
-ax.grid(axis='y', linestyle='--', alpha=0.3)
+ax.yaxis.set_major_formatter(StrMethodFormatter('{x:,.0f}'))
+
 plt.title('Daily Sales Trend')
 plt.ylabel('Net Total')
 plt.xlabel('Date (years major)')
