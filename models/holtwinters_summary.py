@@ -30,6 +30,9 @@ HW_GAMMA = 0.2
 DISCOUNT_PCT    = 0.10
 FORCE_NEW_PRICE = None
 
+# If True, A/B histories use Qty (units). If False, they use receipt counts.
+USE_QTY_FOR_INDIVIDUAL = False
+
 OUTPUT_CSV = 'mba_meal/bundle_holtwinters_summary.csv'
 
 # =========================
@@ -56,25 +59,50 @@ def resolve_ids_by_exact_names(rule_row: pd.Series, product_df: pd.DataFrame) ->
         return None, None
     return str(a_match['product_id'].iloc[0]), str(b_match['product_id'].iloc[0])
 
-def build_ts_receipt_presence(lines: pd.DataFrame, freq: str) -> pd.Series:
+def build_ts_receipt_presence(lines: pd.DataFrame, freq: str, use_qty: bool) -> pd.Series:
+    """Per-period series for a single product:
+       - If use_qty=True: sum Qty per receipt then sum by period (units).
+       - Else: count receipts per period."""
     if lines.empty:
         return pd.Series(dtype=float)
-    rec = lines.groupby('Receipt No').agg(Date=('Date', 'first'))
-    rec['Date'] = pd.to_datetime(rec['Date'], errors='coerce')
-    ts = rec.groupby(pd.Grouper(key='Date', freq=freq)).size().astype(float)
+    df = lines.copy()
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    if use_qty:
+        df['Qty'] = pd.to_numeric(df.get('Qty', 0), errors='coerce').fillna(0)
+        rec = df.groupby('Receipt No').agg(
+            Date=('Date', 'first'),
+            Units=('Qty', 'sum')
+        )
+        ts = rec.groupby(pd.Grouper(key='Date', freq=freq))['Units'].sum().astype(float)
+    else:
+        rec = df.groupby('Receipt No').agg(Date=('Date', 'first'))
+        ts = rec.groupby(pd.Grouper(key='Date', freq=freq)).size().astype(float)
     ts.index = pd.to_datetime(ts.index)
     return ts
 
 def bundle_baseline_series(fact_df: pd.DataFrame, id_a: str, id_b: str, freq: str) -> pd.Series:
+    """DAX-style: Sum Qty for ALL line items on receipts that contain BOTH A and B, then aggregate by period."""
     sub = fact_df[fact_df['Product ID'].astype(str).isin([str(id_a), str(id_b)])]
     receipt_products = sub.groupby('Receipt No')['Product ID'].apply(lambda s: set(s.astype(str)))
     both_receipts_idx = receipt_products[receipt_products.apply(lambda s: (str(id_a) in s) and (str(id_b) in s))].index
 
-    working_df = fact_df[fact_df['Receipt No'].isin(both_receipts_idx)]
-    receipt_summary = working_df.groupby('Receipt No').agg(Date=('Date', 'first'))
+    # Take ALL line items from those receipts (mirrors CALCULATE with receipt filter)
+    working_df = fact_df[fact_df['Receipt No'].isin(both_receipts_idx)].copy()
 
-    receipt_summary['Date'] = pd.to_datetime(receipt_summary['Date'], errors='coerce')
-    bundle_ts = receipt_summary.groupby(pd.Grouper(key='Date', freq=freq)).size().astype(float)
+    working_df['Date'] = pd.to_datetime(working_df['Date'], errors='coerce')
+    working_df['Qty']  = pd.to_numeric(working_df.get('Qty', 0), errors='coerce').fillna(0)
+
+    # Sum Qty per receipt, then aggregate by period
+    receipt_summary = working_df.groupby('Receipt No').agg(
+        Date=('Date', 'first'),
+        Combined_Qty=('Qty', 'sum')
+    )
+    bundle_ts = (
+        receipt_summary
+        .groupby(pd.Grouper(key='Date', freq=freq))['Combined_Qty']
+        .sum()
+        .astype(float)
+    )
     bundle_ts.index = pd.to_datetime(bundle_ts.index)
     return bundle_ts
 
@@ -148,21 +176,18 @@ def compute_bundle_summary_aligned(product_df: pd.DataFrame,
     a_lines = fact_df[fact_df['Product ID'].astype(str) == str(id_a)]
     b_lines = fact_df[fact_df['Product ID'].astype(str) == str(id_b)]
 
-    # Bundle baseline series (count of receipts with BOTH items)
+    # bundle baseline series: SUM Qty on receipts that contain BOTH A and B
     bundle_ts = bundle_baseline_series(fact_df, id_a, id_b, freq)
 
-    # Individual histories
-    a_ts = build_ts_receipt_presence(a_lines, freq)
-    b_ts = build_ts_receipt_presence(b_lines, freq)
+    # Individual histories (toggle receipts COUNT vs Qty UNITS)
+    a_ts = build_ts_receipt_presence(a_lines, freq, use_qty=USE_QTY_FOR_INDIVIDUAL)
+    b_ts = build_ts_receipt_presence(b_lines, freq, use_qty=USE_QTY_FOR_INDIVIDUAL)
 
     series_len = int(max(len(bundle_ts), len(a_ts), len(b_ts)))
 
     # --- Load ε from ped_summary.csv ---
     ped_row = pick_ped_row(ped_df, id_a, id_b)
-    if ped_row is None:
-        epsilon = 0.0
-    else:
-        epsilon = float(ped_row['elasticity_epsilon']) if pd.notna(ped_row['elasticity_epsilon']) else 0.0
+    epsilon = float(ped_row['elasticity_epsilon']) if (ped_row is not None and pd.notna(ped_row['elasticity_epsilon'])) else 0.0
 
     # Common forecast index
     COMMON_FC_INDEX = build_common_fc_index(a_ts, b_ts, bundle_ts, freq, horizon)
@@ -197,7 +222,7 @@ def compute_bundle_summary_aligned(product_df: pd.DataFrame,
     # Adjust RAW bundle forecast by elasticity, then clip
     bundle_fc_adj = (bundle_fc_raw * demand_multiplier).clip(lower=0)
 
-    # Cannibalization (use non-negative baseline bundle units)
+    # Cannibalization (simple subtraction)
     cannibalization_units = bundle_fc
     a_fc_after = (a_fc_all - cannibalization_units).clip(lower=0)
     b_fc_after = (b_fc_all - cannibalization_units).clip(lower=0)
@@ -260,7 +285,7 @@ def main():
 
     # Column sanity
     require_columns(rules_df,   ['antecedents_names', 'consequents_names'], 'RULES file')
-    require_columns(fact_df,    ['Product ID', 'Receipt No', 'Line Total', 'Date'], 'FACT file')
+    require_columns(fact_df,    ['Product ID', 'Receipt No', 'Qty', 'Date'], 'FACT file')
     require_columns(product_df, ['product_id', 'product_name', 'Price'], 'PRODUCT file')
     require_columns(ped_df,     ['product_id_1','product_id_2',
                                  'elasticity_epsilon','intercept_logk','mode','n_price_points'],
@@ -269,8 +294,10 @@ def main():
     # Header
     forced   = FORCE_NEW_PRICE is not None
     disc_str = f"forced price={FORCE_NEW_PRICE:.2f}" if forced else f"{DISCOUNT_PCT*100:.1f}%"
+    indiv_grain = "Qty (units)" if USE_QTY_FOR_INDIVIDUAL else "receipt count"
     print(f"=== Bundle Forecast Summary (TOP {TOP_N} MBA rules; product_id bundles) ===")
     print(f"Discount: {disc_str} | Freq: {AGG_FREQ} | Horizon: {HORIZON} | Seasonal periods: {SEASONAL_PERIODS}")
+    print(f"Series grains — Bundle: Qty on A∩B receipts | Individual A/B: {indiv_grain}")
 
     rows = []
     n = min(TOP_N, len(rules_df))
@@ -290,7 +317,7 @@ def main():
         print("No bundles resolved; nothing to summarize.")
         sys.exit(0)
 
-    # Exact column order (updated label)
+    # Exact column order
     out_cols = [
         'product_id_1','product_id_2','product name 1','product name 2',
         'Price','Discounted_Price','Revenue_Before','Revenue_After',
@@ -298,7 +325,7 @@ def main():
     ]
     out_df = pd.DataFrame(rows)[out_cols]
 
-    # Console table with capped names (updated label)
+    # Console table with capped names
     print_cols = [
         'product name 1','product name 2','Price','Discounted_Price',
         'Revenue_Before','Revenue_After','Revenue_Impact','BreakEven/ SurplusUnits'
