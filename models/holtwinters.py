@@ -16,7 +16,7 @@ PRODUCT_PATH      = 'etl_dimensions/current_product_dimension.csv'
 PED_SUMMARY_PATH  = PARENT_DIR + '/ped_output/ped_summary.csv'   # <— from the standalone PED script
 
 # Bundle selection (row in association_rules.csv to analyze)
-BUNDLE_ROW = 5
+BUNDLE_ROW = 1
 
 # Time-series settings
 AGG_FREQ = 'QE'            # 'QE' = Quarter End; (e.g., 'MS' for Month Start)
@@ -30,7 +30,7 @@ HW_BETA  = 0.2
 HW_GAMMA = 0.2
 
 # Price scenario
-NEW_PRICE = 437.4         # promotional bundle price you want to test
+NEW_PRICE = 419.4         # promotional bundle price you want to test
 
 # =========================
 # HELPERS
@@ -149,22 +149,34 @@ if n_points < 2:
     print("Warning: PED file shows fewer than 2 price points; elasticity may be unreliable.")
 
 # =========================
-# BUILD HISTORICAL SERIES (same as your original)
+# BUILD HISTORICAL SERIES (DAX-STYLE LOGIC)
 # =========================
+# 1) Find receipts that contain BOTH A and B
 pair_transactions = fact_df[fact_df['Product ID'].astype(str).isin([product_a_id, product_b_id])]
 receipt_products = pair_transactions.groupby('Receipt No')['Product ID'].apply(lambda s: set(s.astype(str)))
 receipts_with_both = receipt_products[
     receipt_products.apply(lambda s: (product_a_id in s) and (product_b_id in s))
 ].index
 
-working_df = fact_df[fact_df['Receipt No'].isin(receipts_with_both)]
+working_df = fact_df[fact_df['Receipt No'].isin(receipts_with_both)].copy()
+
+working_df['Date'] = pd.to_datetime(working_df['Date'], errors='coerce')
+working_df['Qty']  = pd.to_numeric(working_df['Qty'], errors='coerce').fillna(0)
+
 receipt_summary = working_df.groupby('Receipt No').agg(
-    Combined_Price=('Line Total', 'sum'),
+    Combined_Qty=('Qty', 'sum'),
     Date=('Date', 'first')
 )
 
-receipt_summary['Date'] = pd.to_datetime(receipt_summary['Date'], errors='coerce')
-bundle_sales_ts = receipt_summary.groupby(pd.Grouper(key='Date', freq=AGG_FREQ)).size()
+bundle_sales_ts = (
+    receipt_summary
+      .groupby(pd.Grouper(key='Date', freq=AGG_FREQ))['Combined_Qty']
+      .sum()
+      .fillna(0.0)
+)
+
+print("\nSUM of Qty on receipts containing both A and B:")
+print(bundle_sales_ts)
 
 def build_ts_all(lines: pd.DataFrame) -> pd.Series:
     if lines.empty:
@@ -434,8 +446,6 @@ def evaluate_model(fitted_model, actual_series: pd.Series, label: str):
         rmse = np.sqrt(mse)
         mae = np.mean(np.abs(residuals))
         wmape = np.sum(np.abs(residuals)) / np.sum(np.abs(actual_vals)) * 100 if np.sum(actual_vals) != 0 else np.nan
-        ss_res = np.sum(residuals ** 2)
-        ss_tot = np.sum((actual_vals - np.mean(actual_vals)) ** 2)
 
         print(f"\n[{label}]")
         print(f"  Mean Squared Error (MSE):       {mse:.4f}")
