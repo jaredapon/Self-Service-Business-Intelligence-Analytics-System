@@ -12,7 +12,7 @@ from sklearn.metrics import r2_score
 # =========================
 # USER CONFIGURATION
 # =========================
-SAVE_FOLDER = 'mba_foods'
+SAVE_FOLDER = 'mba_meal'
 RULES_PATH   = SAVE_FOLDER + '/association_rules.csv'
 FACT_PATH    = 'etl_dimensions/fact_transaction_dimension.csv'
 PRODUCT_PATH = 'etl_dimensions/current_product_dimension.csv'
