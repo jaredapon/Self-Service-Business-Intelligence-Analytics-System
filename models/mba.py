@@ -149,18 +149,17 @@ else:
 
             rules_filtered = remove_duplicate_pairs(rules_filtered)
 
-            # Create a combined score that balances lift and support
-            rules_filtered['combined_score'] = (rules_filtered['lift'] * 0.7) + (rules_filtered['support'] / rules_filtered['support'].max() * 30)
-
-            # Sort by the combined score
-            rules_filtered = rules_filtered.sort_values('combined_score', ascending=False)
+            # Remove combined_score calculation and sorting
+            # rules_filtered['combined_score'] = (rules_filtered['lift'] * 0.7) + (rules_filtered['support'] / rules_filtered['support'].max() * 30)
+            # rules_filtered = rules_filtered.sort_values('combined_score', ascending=False)
 
             rules_filtered['antecedents_sku'] = rules_filtered['antecedents'].apply(
                 lambda s: ', '.join(sorted(s)))
             rules_filtered['consequents_sku'] = rules_filtered['consequents'].apply(
                 lambda s: ', '.join(sorted(s)))
-            association_rules_export = rules_filtered[[
-                'antecedents_sku', 'consequents_sku', 'support', 'confidence', 'lift', 'leverage', 'conviction', 'combined_score']].copy()
+            association_rules_export = rules_filtered[
+                ['antecedents_sku', 'consequents_sku', 'support', 'confidence', 'lift', 'leverage', 'conviction']
+            ].copy()
 
 # --- Translate IDs to Names for Final Output ---
 if 'id_to_name' in locals():
@@ -276,11 +275,12 @@ def run_mba_for_category(category_name, output_folder, all_itemsets, all_rules):
             print("No association rules found for category.")
             association_rules_export = pd.DataFrame(columns=['antecedents_names', 'consequents_names', 'support', 'confidence', 'lift', 'leverage', 'conviction'])
         else:
-            rules_filtered_cat['combined_score'] = (rules_filtered_cat['lift'] * 0.7) + (rules_filtered_cat['support'] / rules_filtered_cat['support'].max() * 30)
-            rules_filtered_cat = rules_filtered_cat.sort_values('combined_score', ascending=False)
+            # Remove combined_score calculation and sorting
+            # rules_filtered_cat['combined_score'] = (rules_filtered_cat['lift'] * 0.7) + (rules_filtered_cat['support'] / rules_filtered_cat['support'].max() * 30)
+            # rules_filtered_cat = rules_filtered_cat.sort_values('combined_score', ascending=False)
             rules_filtered_cat['antecedents_sku'] = rules_filtered_cat['antecedents'].apply(lambda s: ', '.join(sorted(s)))
             rules_filtered_cat['consequents_sku'] = rules_filtered_cat['consequents'].apply(lambda s: ', '.join(sorted(s)))
-            association_rules_export = rules_filtered_cat[['antecedents_sku', 'consequents_sku', 'support', 'confidence', 'lift', 'leverage', 'conviction', 'combined_score']].copy()
+            association_rules_export = rules_filtered_cat[['antecedents_sku', 'consequents_sku', 'support', 'confidence', 'lift', 'leverage', 'conviction']].copy()
 
     # Translate IDs to Names
     def translate_ids_to_names(id_string):
@@ -377,11 +377,12 @@ def run_mba_for_meal(output_folder, all_itemsets, all_rules):
         print("No meal association rules found.")
         association_rules_export = pd.DataFrame(columns=['antecedents_names', 'consequents_names', 'support', 'confidence', 'lift', 'leverage', 'conviction'])
     else:
-        rules_filtered_meal['combined_score'] = (rules_filtered_meal['lift'] * 0.7) + (rules_filtered_meal['support'] / rules_filtered_meal['support'].max() * 30)
-        rules_filtered_meal = rules_filtered_meal.sort_values('combined_score', ascending=False)
+        # Remove combined_score calculation and sorting
+        # rules_filtered_meal['combined_score'] = (rules_filtered_meal['lift'] * 0.7) + (rules_filtered_meal['support'] / rules_filtered_meal['support'].max() * 30)
+        # rules_filtered_meal = rules_filtered_meal.sort_values('combined_score', ascending=False)
         rules_filtered_meal['antecedents_sku'] = rules_filtered_meal['antecedents'].apply(lambda s: ', '.join(sorted(s)))
         rules_filtered_meal['consequents_sku'] = rules_filtered_meal['consequents'].apply(lambda s: ', '.join(sorted(s)))
-        association_rules_export = rules_filtered_meal[['antecedents_sku', 'consequents_sku', 'support', 'confidence', 'lift', 'leverage', 'conviction', 'combined_score']].copy()
+        association_rules_export = rules_filtered_meal[['antecedents_sku', 'consequents_sku', 'support', 'confidence', 'lift', 'leverage', 'conviction']].copy()
 
     # Translate IDs to Names
     def translate_ids_to_names(id_string):
