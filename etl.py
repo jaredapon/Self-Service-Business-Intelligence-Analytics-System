@@ -563,8 +563,19 @@ def load(combined_df):
         print(
             f"After duplicate removal: {len(combined_df)} fact transaction records")
 
+        # --- EXCLUDE LAST MONTH ---
+        if 'Date' in combined_df.columns:
+            # Ensure Date is datetime
+            combined_df['Date'] = pd.to_datetime(combined_df['Date'], errors='coerce')
+            # Find the latest month in the data
+            latest_month = combined_df['Date'].dt.to_period('M').max()
+            # Filter out rows from the latest month
+            filtered_df = combined_df[combined_df['Date'].dt.to_period('M') != latest_month].reset_index(drop=True)
+        else:
+            filtered_df = combined_df
+
         # Create fact transaction dimension
-        combined_df.to_csv(
+        filtered_df.to_csv(
             'etl_dimensions/fact_transaction_dimension.csv', index=False)
         print("etl_dimensions/fact_transaction_dimension.csv created")
         # SCD Type 4 Product Dimension (needed to derive parent_sku mapping)
