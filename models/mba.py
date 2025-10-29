@@ -116,7 +116,7 @@ else:
 
     # Use the original, unfiltered itemsets for rule generation
     rules = association_rules(
-        frequent_itemsets_fpgrowth, metric="confidence", min_threshold=0.03)
+        frequent_itemsets_fpgrowth, metric="confidence", min_threshold=0.15)  # changed from 0.1 to 0.15
     rules = rules[(rules['lift'] >= 1)].sort_values(
         ['confidence', 'lift'], ascending=[False, False])
 
@@ -217,7 +217,7 @@ if 'id_to_name' in locals():
 # print(f"- Total frequent itemsets: {len(frequent_itemsets_export)}")
 # print(f"- Total association rules: {len(association_rules_export)}")
 
-def run_mba_for_category(category_name, output_folder):
+def run_mba_for_category(category_name, output_folder, all_itemsets, all_rules):
     print(f"\n--- Running MBA for category: {category_name} ---")
     os.makedirs(output_folder, exist_ok=True)
 
@@ -235,7 +235,7 @@ def run_mba_for_category(category_name, output_folder):
 
     if df_cat.empty:
         print(f"No transactions found for category {category_name}.")
-        return
+        return all_itemsets, all_rules
 
     print("One hot encoding...")
     one_hot_cat = df_cat['product_ids'].astype(str).str.get_dummies(sep=',')
@@ -263,7 +263,7 @@ def run_mba_for_category(category_name, output_folder):
         association_rules_export = pd.DataFrame(columns=['antecedents_names', 'consequents_names', 'support', 'confidence', 'lift', 'leverage', 'conviction'])
     else:
         frequent_itemsets_export = filtered_itemsets_cat[['support', 'itemsets_sku']].copy()
-        rules_cat = association_rules(frequent_itemsets_cat, metric="confidence", min_threshold=0.03)
+        rules_cat = association_rules(frequent_itemsets_cat, metric="confidence", min_threshold=0.15)  # changed from 0.1 to 0.15
         rules_cat = rules_cat[(rules_cat['lift'] >= 1)].sort_values(['confidence', 'lift'], ascending=[False, False])
 
         # Only keep rules where all items are in the category
@@ -291,10 +291,12 @@ def run_mba_for_category(category_name, output_folder):
 
     frequent_itemsets_export.rename(columns={'itemsets_sku': 'itemsets_names'}, inplace=True)
     frequent_itemsets_export['itemsets_names'] = frequent_itemsets_export['itemsets_names'].apply(translate_ids_to_names)
+    frequent_itemsets_export['category'] = category_name
     association_rules_export.rename(columns={'antecedents_sku': 'antecedents_names', 'consequents_sku': 'consequents_names'}, inplace=True)
     if not association_rules_export.empty:
         association_rules_export['antecedents_names'] = association_rules_export['antecedents_names'].apply(translate_ids_to_names)
         association_rules_export['consequents_names'] = association_rules_export['consequents_names'].apply(translate_ids_to_names)
+    association_rules_export['category'] = category_name
 
     def remove_reversed_rule_duplicates(df):
         seen = set()
@@ -302,7 +304,6 @@ def run_mba_for_category(category_name, output_folder):
         for _, row in df.iterrows():
             a = row['antecedents_names']
             c = row['consequents_names']
-            # Use sorted tuple of names to identify reversed duplicates
             key = tuple(sorted([a, c]))
             if key not in seen:
                 seen.add(key)
@@ -312,20 +313,13 @@ def run_mba_for_category(category_name, output_folder):
     # After translating names, remove reversed duplicates
     association_rules_export = remove_reversed_rule_duplicates(association_rules_export)
 
-    # Export results
-    excel_file_path = os.path.join(output_folder, 'market_basket_analysis_results.xlsx')
-    with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
-        frequent_itemsets_export.to_excel(writer, sheet_name='frequent_itemsets', index=False)
-        association_rules_export.to_excel(writer, sheet_name='association_rules', index=False)
+    # Append to all results
+    all_itemsets = pd.concat([all_itemsets, frequent_itemsets_export], ignore_index=True)
+    all_rules = pd.concat([all_rules, association_rules_export], ignore_index=True)
 
-    frequent_itemsets_csv_path = os.path.join(output_folder, 'frequent_itemsets.csv')
-    association_rules_csv_path = os.path.join(output_folder, 'association_rules.csv')
-    frequent_itemsets_export.to_csv(frequent_itemsets_csv_path, index=False)
-    association_rules_export.to_csv(association_rules_csv_path, index=False)
+    return all_itemsets, all_rules
 
-    print(f"Results for {category_name} exported to {output_folder}")
-
-def run_mba_for_meal(output_folder):
+def run_mba_for_meal(output_folder, all_itemsets, all_rules):
     print(f"\n--- Running MBA for MEAL (FOOD <-> DRINK) ---")
     os.makedirs(output_folder, exist_ok=True)
 
@@ -343,7 +337,7 @@ def run_mba_for_meal(output_folder):
     df_meal = df[df['product_ids'].apply(has_food_and_drink)].copy()
     if df_meal.empty:
         print("No transactions found with both FOOD and DRINK.")
-        return
+        return all_itemsets, all_rules
 
     print("One hot encoding...")
     one_hot_meal = df_meal['product_ids'].astype(str).str.get_dummies(sep=',')
@@ -368,7 +362,7 @@ def run_mba_for_meal(output_folder):
     frequent_itemsets_export = filtered_itemsets_meal[['support', 'itemsets_sku']].copy()
 
     # Generate rules and filter for FOOD->DRINK or DRINK->FOOD
-    rules_meal = association_rules(frequent_itemsets_meal, metric="confidence", min_threshold=0.03)
+    rules_meal = association_rules(frequent_itemsets_meal, metric="confidence", min_threshold=0.15)  # changed from 0.1 to 0.15
     rules_meal = rules_meal[(rules_meal['lift'] >= 1)].sort_values(['confidence', 'lift'], ascending=[False, False])
 
     def is_meal_rule(antecedents, consequents):
@@ -398,10 +392,12 @@ def run_mba_for_meal(output_folder):
 
     frequent_itemsets_export.rename(columns={'itemsets_sku': 'itemsets_names'}, inplace=True)
     frequent_itemsets_export['itemsets_names'] = frequent_itemsets_export['itemsets_names'].apply(translate_ids_to_names)
+    frequent_itemsets_export['category'] = 'MEAL'
     association_rules_export.rename(columns={'antecedents_sku': 'antecedents_names', 'consequents_sku': 'consequents_names'}, inplace=True)
     if not association_rules_export.empty:
         association_rules_export['antecedents_names'] = association_rules_export['antecedents_names'].apply(translate_ids_to_names)
         association_rules_export['consequents_names'] = association_rules_export['consequents_names'].apply(translate_ids_to_names)
+    association_rules_export['category'] = 'MEAL'
 
     # Remove reversed duplicates
     def remove_reversed_rule_duplicates(df):
@@ -418,23 +414,33 @@ def run_mba_for_meal(output_folder):
 
     association_rules_export = remove_reversed_rule_duplicates(association_rules_export)
 
-    # Export results
-    excel_file_path = os.path.join(output_folder, 'market_basket_analysis_results.xlsx')
-    with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
-        frequent_itemsets_export.to_excel(writer, sheet_name='frequent_itemsets', index=False)
-        association_rules_export.to_excel(writer, sheet_name='association_rules', index=False)
+    # Append to all results
+    all_itemsets = pd.concat([all_itemsets, frequent_itemsets_export], ignore_index=True)
+    all_rules = pd.concat([all_rules, association_rules_export], ignore_index=True)
 
-    frequent_itemsets_csv_path = os.path.join(output_folder, 'frequent_itemsets.csv')
-    association_rules_csv_path = os.path.join(output_folder, 'association_rules.csv')
-    frequent_itemsets_export.to_csv(frequent_itemsets_csv_path, index=False)
-    association_rules_export.to_csv(association_rules_csv_path, index=False)
-
-    print(f"Results for MEAL exported to {output_folder}")
+    return all_itemsets, all_rules
 
 # --- Main execution ---
 if 'prod_dim' in locals():
-    run_mba_for_category('FOOD', 'mba_foods')
-    run_mba_for_category('DRINK', 'mba_drinks')
-    run_mba_for_meal('mba_meal')
+    output_folder = 'mba_output'
+    os.makedirs(output_folder, exist_ok=True)
+    all_itemsets = pd.DataFrame()
+    all_rules = pd.DataFrame()
+    all_itemsets, all_rules = run_mba_for_category('FOOD', output_folder, all_itemsets, all_rules)
+    all_itemsets, all_rules = run_mba_for_category('DRINK', output_folder, all_itemsets, all_rules)
+    all_itemsets, all_rules = run_mba_for_meal(output_folder, all_itemsets, all_rules)
+
+    # Export combined results
+    excel_file_path = os.path.join(output_folder, 'market_basket_analysis_results.xlsx')
+    with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
+        all_itemsets.to_excel(writer, sheet_name='frequent_itemsets', index=False)
+        all_rules.to_excel(writer, sheet_name='association_rules', index=False)
+
+    frequent_itemsets_csv_path = os.path.join(output_folder, 'frequent_itemsets.csv')
+    association_rules_csv_path = os.path.join(output_folder, 'association_rules.csv')
+    all_itemsets.to_csv(frequent_itemsets_csv_path, index=False)
+    all_rules.to_csv(association_rules_csv_path, index=False)
+
+    print(f"\nResults exported successfully to {output_folder}")
 else:
     print("Product dimension not loaded; cannot run category-specific MBA.")
