@@ -313,6 +313,12 @@ def run_mba_for_category(category_name, output_folder, all_itemsets, all_rules):
     # After translating names, remove reversed duplicates
     association_rules_export = remove_reversed_rule_duplicates(association_rules_export)
 
+    # LIMIT RESULTS TO TOP 5 PER CATEGORY
+    if not frequent_itemsets_export.empty:
+        frequent_itemsets_export = frequent_itemsets_export.sort_values('support', ascending=False).head(5).reset_index(drop=True)
+    if not association_rules_export.empty and {'confidence', 'lift'}.issubset(association_rules_export.columns):
+        association_rules_export = association_rules_export.sort_values(['confidence', 'lift'], ascending=[False, False]).head(5).reset_index(drop=True)
+
     # Append to all results
     all_itemsets = pd.concat([all_itemsets, frequent_itemsets_export], ignore_index=True)
     all_rules = pd.concat([all_rules, association_rules_export], ignore_index=True)
@@ -414,6 +420,12 @@ def run_mba_for_meal(output_folder, all_itemsets, all_rules):
         return pd.DataFrame(keep_rows)
 
     association_rules_export = remove_reversed_rule_duplicates(association_rules_export)
+
+    # LIMIT RESULTS TO TOP 5 FOR MEAL CATEGORY
+    if not frequent_itemsets_export.empty:
+        frequent_itemsets_export = frequent_itemsets_export.sort_values('support', ascending=False).head(5).reset_index(drop=True)
+    if not association_rules_export.empty and {'confidence', 'lift'}.issubset(association_rules_export.columns):
+        association_rules_export = association_rules_export.sort_values(['confidence', 'lift'], ascending=[False, False]).head(5).reset_index(drop=True)
 
     # Append to all results
     all_itemsets = pd.concat([all_itemsets, frequent_itemsets_export], ignore_index=True)
