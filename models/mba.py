@@ -444,10 +444,10 @@ if 'prod_dim' in locals():
     all_itemsets, all_rules = run_mba_for_meal(output_folder, all_itemsets, all_rules)
 
     # Export combined results
-    excel_file_path = os.path.join(output_folder, 'market_basket_analysis_results.xlsx')
-    with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
-        all_itemsets.to_excel(writer, sheet_name='frequent_itemsets', index=False)
-        all_rules.to_excel(writer, sheet_name='association_rules', index=False)
+    # excel_file_path = os.path.join(output_folder, 'market_basket_analysis_results.xlsx')
+    # with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
+    #     all_itemsets.to_excel(writer, sheet_name='frequent_itemsets', index=False)
+    #     all_rules.to_excel(writer, sheet_name='association_rules', index=False)
 
     frequent_itemsets_csv_path = os.path.join(output_folder, 'frequent_itemsets.csv')
     association_rules_csv_path = os.path.join(output_folder, 'association_rules.csv')
