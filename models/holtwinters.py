@@ -27,7 +27,7 @@ HW_BETA  = 0.2
 HW_GAMMA = 0.2
 
 # Price scenario
-NEW_PRICE = 437.4
+DISCOUNT_RATE = 0.05
 
 # =========================
 # HELPER FUNCTIONS
@@ -160,7 +160,7 @@ for idx, rule_row in rules_df.iterrows():
         current_price_a = float(product_df.loc[product_df['product_id'].astype(str) == str(product_a_id), 'Price'].iloc[0])
         current_price_b = float(product_df.loc[product_df['product_id'].astype(str) == str(product_b_id), 'Price'].iloc[0])
         current_price = current_price_a + current_price_b
-        new_price = float(NEW_PRICE)
+        new_price = current_price * (1 - DISCOUNT_RATE)
         price_ratio = new_price / current_price if current_price > 0 else 1.0
         demand_multiplier = price_ratio ** epsilon if current_price > 0 else 1.0
 
