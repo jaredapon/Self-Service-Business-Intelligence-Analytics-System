@@ -472,3 +472,34 @@ try:
     evaluate_model(hw_b, b_ts_all, f"{product_b_name} (Individual)")
 except Exception as e:
     print(f"Product B model evaluation failed: {e}")
+# ...existing code...
+
+# =========================
+# PRINT HISTORICAL DATA POINTS (as DataFrame)
+# =========================
+print("\n--- Historical Data Points (Bundle, Product A, Product B) ---")
+df_points = pd.DataFrame({
+    'Bundle_Units': bundle_sales_ts,
+    f'{product_a_name}_Units': a_ts_all,
+    f'{product_b_name}_Units': b_ts_all
+})
+
+# Prepare forecast DataFrame
+df_forecast = pd.DataFrame({
+    'Bundle_Units': bundle_fc,
+    'Bundle_Units_Adjusted': bundle_fc_adj,
+    f'{product_a_name}_Units': a_fc_all,
+    f'{product_b_name}_Units': b_fc_all
+})
+
+# Concatenate historical and forecast data
+df_all = pd.concat([df_points, df_forecast], axis=0)
+df_all.index.name = 'Date'
+
+print(df_all)
+
+# Save to CSV
+df_all.to_csv("hw_data.csv", index=True)
+print('\nHistorical data and forecasts saved to "hw_data.csv".')
+
+# ...existing code...
