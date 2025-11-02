@@ -116,9 +116,12 @@ else:
 
     # Use the original, unfiltered itemsets for rule generation
     rules = association_rules(
-        frequent_itemsets_fpgrowth, metric="confidence", min_threshold=0.15)  # changed from 0.1 to 0.15
+        frequent_itemsets_fpgrowth, metric="confidence", min_threshold=0.15)
     rules = rules[(rules['lift'] >= 1)].sort_values(
         ['confidence', 'lift'], ascending=[False, False])
+
+    # --- Only keep rules where antecedents and consequents are single items (A -> B) ---
+    rules = rules[rules['antecedents'].apply(lambda x: len(x) == 1) & rules['consequents'].apply(lambda x: len(x) == 1)]
 
     if rules.empty:
         print("No association rules found.")
@@ -148,10 +151,6 @@ else:
                 return pd.DataFrame(unique_rows)
 
             rules_filtered = remove_duplicate_pairs(rules_filtered)
-
-            # Remove combined_score calculation and sorting
-            # rules_filtered['combined_score'] = (rules_filtered['lift'] * 0.7) + (rules_filtered['support'] / rules_filtered['support'].max() * 30)
-            # rules_filtered = rules_filtered.sort_values('combined_score', ascending=False)
 
             rules_filtered['antecedents_sku'] = rules_filtered['antecedents'].apply(
                 lambda s: ', '.join(sorted(s)))
@@ -265,6 +264,9 @@ def run_mba_for_category(category_name, output_folder, all_itemsets, all_rules):
         rules_cat = association_rules(frequent_itemsets_cat, metric="confidence", min_threshold=0.15)  # changed from 0.1 to 0.15
         rules_cat = rules_cat[(rules_cat['lift'] >= 1)].sort_values(['confidence', 'lift'], ascending=[False, False])
 
+        # --- Only keep rules where antecedents and consequents are single items (A -> B) ---
+        rules_cat = rules_cat[rules_cat['antecedents'].apply(lambda x: len(x) == 1) & rules_cat['consequents'].apply(lambda x: len(x) == 1)]
+
         # Only keep rules where all items are in the category
         def rule_all_in_cat(fset):
             return all(str(tok) in cat_product_ids for tok in fset)
@@ -319,6 +321,17 @@ def run_mba_for_category(category_name, output_folder, all_itemsets, all_rules):
     if not association_rules_export.empty and {'confidence', 'lift'}.issubset(association_rules_export.columns):
         association_rules_export = association_rules_export.sort_values(['confidence', 'lift'], ascending=[False, False]).head(5).reset_index(drop=True)
 
+    # --- Add bundle id ---
+    bundle_prefix = 'BF' if category_name == 'FOOD' else 'BD'
+    association_rules_export['bundle_id'] = [
+        f"{bundle_prefix}{str(i+1).zfill(2)}" for i in range(len(association_rules_export))
+    ]
+    # Move bundle_id to first column
+    if not association_rules_export.empty:
+        cols = association_rules_export.columns.tolist()
+        cols.insert(0, cols.pop(cols.index('bundle_id')))
+        association_rules_export = association_rules_export[cols]
+
     # Append to all results
     all_itemsets = pd.concat([all_itemsets, frequent_itemsets_export], ignore_index=True)
     all_rules = pd.concat([all_rules, association_rules_export], ignore_index=True)
@@ -370,6 +383,9 @@ def run_mba_for_meal(output_folder, all_itemsets, all_rules):
     # Generate rules and filter for FOOD->DRINK or DRINK->FOOD
     rules_meal = association_rules(frequent_itemsets_meal, metric="confidence", min_threshold=0.15)  # changed from 0.1 to 0.15
     rules_meal = rules_meal[(rules_meal['lift'] >= 1)].sort_values(['confidence', 'lift'], ascending=[False, False])
+
+    # --- Only keep rules where antecedents and consequents are single items (A -> B) ---
+    rules_meal = rules_meal[rules_meal['antecedents'].apply(lambda x: len(x) == 1) & rules_meal['consequents'].apply(lambda x: len(x) == 1)]
 
     def is_meal_rule(antecedents, consequents):
         a = set(str(tok) for tok in antecedents)
@@ -426,6 +442,16 @@ def run_mba_for_meal(output_folder, all_itemsets, all_rules):
         frequent_itemsets_export = frequent_itemsets_export.sort_values('support', ascending=False).head(5).reset_index(drop=True)
     if not association_rules_export.empty and {'confidence', 'lift'}.issubset(association_rules_export.columns):
         association_rules_export = association_rules_export.sort_values(['confidence', 'lift'], ascending=[False, False]).head(5).reset_index(drop=True)
+
+    # --- Add bundle id ---
+    association_rules_export['bundle_id'] = [
+        f"BM{str(i+1).zfill(2)}" for i in range(len(association_rules_export))
+    ]
+    # Move bundle_id to first column
+    if not association_rules_export.empty:
+        cols = association_rules_export.columns.tolist()
+        cols.insert(0, cols.pop(cols.index('bundle_id')))
+        association_rules_export = association_rules_export[cols]
 
     # Append to all results
     all_itemsets = pd.concat([all_itemsets, frequent_itemsets_export], ignore_index=True)
