@@ -491,7 +491,9 @@ df_forecast = pd.DataFrame({
     'Bundle_Units_Forecast': bundle_fc,
     'Bundle_Units_Adjusted_Forecast': bundle_fc_adj,
     'Antecedent_Units_Forecast': a_fc_all,
-    'Consequent_Units_Forecast': b_fc_all
+    'Antecedent_Units_After_Cannibalization': a_fc_after_aligned,
+    'Consequent_Units_Forecast': b_fc_all,
+    'Consequent_Units_After_Cannibalization': b_fc_after_aligned
 })
 
 
@@ -500,6 +502,12 @@ df_all = pd.concat([df_points, df_forecast], axis=0)
 df_all.index.name = 'Date'
 
 print(df_all)
+
+# Add bundle_id and category columns from ped_row (if available)
+bundle_id = ped_row['bundle_id'] if 'bundle_id' in ped_row else ''
+category = ped_row['category'] if 'category' in ped_row else ''
+df_all['bundle_id'] = bundle_id
+df_all['category'] = category
 
 OUTPUT_CSV = os.path.join(OUTPUT_DIR, 'holtwinters_results.csv')
 os.makedirs(OUTPUT_DIR, exist_ok=True)
