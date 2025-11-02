@@ -231,12 +231,8 @@ for idx, rule_row in rules_df.iterrows():
         df_all['bundle_row'] = idx
         df_all['bundle_id'] = bundle_id           # <-- Add bundle_id
         df_all['category'] = category             # <-- Add category
-        df_all['antecedent_name'] = product_a_name
-        df_all['consequent_name'] = product_b_name
-        df_all['elasticity_epsilon'] = epsilon
-        df_all['intercept_logk'] = intercept
-        df_all['revenue_impact_abs'] = impact_abs
-        df_all['revenue_impact_pct'] = impact_pct
+        # Remove columns: antecedent_name, consequent_name, elasticity_epsilon, intercept_logk, revenue_impact_abs, revenue_impact_pct
+        # (Do not add them at all)
         all_results.append(df_all)
 
         print(f"✅ Done: {product_a_name} + {product_b_name} | Impact: {impact_abs:.2f} ({impact_pct:.1f}%)")
@@ -250,6 +246,13 @@ for idx, rule_row in rules_df.iterrows():
 # =========================
 if all_results:
     combined_df = pd.concat(all_results)
+    # Drop columns if they somehow exist (defensive, in case of legacy code)
+    drop_cols = [
+        'antecedent_name', 'consequent_name',
+        'elasticity_epsilon', 'intercept_logk',
+        'revenue_impact_abs', 'revenue_impact_pct'
+    ]
+    combined_df = combined_df.drop(columns=[c for c in drop_cols if c in combined_df.columns], errors='ignore')
     OUTPUT_CSV = os.path.join(OUTPUT_DIR, 'holtwinters_results_all.csv')
     combined_df.to_csv(OUTPUT_CSV, index=True)
     print(f"\n✅ All bundle forecasts saved to {OUTPUT_CSV}")
