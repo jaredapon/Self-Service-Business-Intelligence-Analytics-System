@@ -15,6 +15,8 @@ FACT_PATH         = 'etl_dimensions/fact_transaction_dimension.csv'
 PRODUCT_PATH      = 'etl_dimensions/current_product_dimension.csv'
 PED_SUMMARY_PATH  = PARENT_DIR + '/ped_output/ped_summary.csv'   # <— from the standalone PED script
 
+OUTPUT_DIR = 'holtwinters_results'
+
 # Bundle selection (row in association_rules.csv to analyze)
 BUNDLE_ROW = 5
 
@@ -416,7 +418,7 @@ axes[2].set_ylabel('Receipts with Product B')
 axes[2].grid(True)
 axes[2].legend(loc='best')
 
-plt.show()
+# plt.show()
 
 # =========================
 # MODEL EVALUATION METRICS
@@ -480,17 +482,18 @@ except Exception as e:
 print("\n--- Historical Data Points (Bundle, Product A, Product B) ---")
 df_points = pd.DataFrame({
     'Bundle_Units': bundle_sales_ts,
-    f'{product_a_name}_Units': a_ts_all,
-    f'{product_b_name}_Units': b_ts_all
+    'Antecedent_Units': a_ts_all,
+    'Consequent_Units': b_ts_all
 })
 
-# Prepare forecast DataFrame
+# Prepare forecast DataFrame with separate columns for forecasts
 df_forecast = pd.DataFrame({
-    'Bundle_Units': bundle_fc,
-    'Bundle_Units_Adjusted': bundle_fc_adj,
-    f'{product_a_name}_Units': a_fc_all,
-    f'{product_b_name}_Units': b_fc_all
+    'Bundle_Units_Forecast': bundle_fc,
+    'Bundle_Units_Adjusted_Forecast': bundle_fc_adj,
+    'Antecedent_Units_Forecast': a_fc_all,
+    'Consequent_Units_Forecast': b_fc_all
 })
+
 
 # Concatenate historical and forecast data
 df_all = pd.concat([df_points, df_forecast], axis=0)
@@ -498,8 +501,9 @@ df_all.index.name = 'Date'
 
 print(df_all)
 
-# Save to CSV
-df_all.to_csv("hw_data.csv", index=True)
-print('\nHistorical data and forecasts saved to "hw_data.csv".')
+OUTPUT_CSV = os.path.join(OUTPUT_DIR, 'holtwinters_results.csv')
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+df_all.to_csv(OUTPUT_CSV, index=True)
+print(f'\nHistorical data and forecasts saved to "{OUTPUT_CSV}".')
 
 # ...existing code...
