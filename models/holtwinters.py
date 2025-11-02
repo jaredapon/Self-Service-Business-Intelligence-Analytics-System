@@ -9,7 +9,7 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 # USER CONFIGURATION
 # =========================
 # File paths
-PARENT_DIR        = 'mba_meal'
+PARENT_DIR        = 'mba_output'
 RULES_PATH        = PARENT_DIR + '/association_rules.csv'
 FACT_PATH         = 'etl_dimensions/fact_transaction_dimension.csv'
 PRODUCT_PATH      = 'etl_dimensions/current_product_dimension.csv'
