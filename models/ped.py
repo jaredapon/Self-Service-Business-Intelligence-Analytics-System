@@ -253,6 +253,10 @@ def main():
         name_b = safe_name(product_df, id_b)
         bundle_label = f"{name_a} + {name_b}"
 
+        # --- Get bundle_id and category from rules_df if present ---
+        bundle_id = rule['bundle_id'] if 'bundle_id' in rule else ""
+        category = rule['category'] if 'category' in rule else ""
+
         # Build price-quantity points according to toggle
         if STRICT_BUNDLE_ONLY:
             price_qty = build_price_qty_points_strict(fact_df, id_a, id_b)
@@ -278,6 +282,8 @@ def main():
             plot_path = str(out_png)
 
         rows.append({
+            'bundle_id': bundle_id,
+            'category': category,  # <-- Add category here
             'rule_row': i,
             'product_id_1': id_a,
             'product_id_2': id_b,
