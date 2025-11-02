@@ -124,7 +124,7 @@ for idx, rule_row in rules_df.iterrows():
         # --- PED row ---
         ped_row = pick_ped_row(ped_df, product_a_id, product_b_id)
         if ped_row is None:
-            print(f"⚠️ Skipping {product_a_name} + {product_b_name}: No PED match.")
+            print(f" Skipping {product_a_name} + {product_b_name}: No PED match.")
             continue
 
         epsilon   = float(ped_row.get('elasticity_epsilon', 0.0) or 0.0)
@@ -153,7 +153,7 @@ for idx, rule_row in rules_df.iterrows():
         b_ts_all = build_ts_all(b_lines_all, AGG_FREQ)
 
         if bundle_sales_ts.empty and (a_ts_all.empty and b_ts_all.empty):
-            print("⚠️ No sales data found. Skipping.")
+            print(" No sales data found. Skipping.")
             continue
 
         # --- Price & elasticity scenario ---
@@ -235,10 +235,10 @@ for idx, rule_row in rules_df.iterrows():
         # (Do not add them at all)
         all_results.append(df_all)
 
-        print(f"✅ Done: {product_a_name} + {product_b_name} | Impact: {impact_abs:.2f} ({impact_pct:.1f}%)")
+        print(f" Done: {product_a_name} + {product_b_name} | Impact: {impact_abs:.2f} ({impact_pct:.1f}%)")
 
     except Exception as e:
-        print(f"❌ Error in row {idx}: {e}")
+        print(f" Error in row {idx}: {e}")
         continue
 
 # =========================
@@ -255,6 +255,7 @@ if all_results:
     combined_df = combined_df.drop(columns=[c for c in drop_cols if c in combined_df.columns], errors='ignore')
     OUTPUT_CSV = os.path.join(OUTPUT_DIR, 'holtwinters_results_all.csv')
     combined_df.to_csv(OUTPUT_CSV, index=True)
-    print(f"\n✅ All bundle forecasts saved to {OUTPUT_CSV}")
+    print(f"\n All bundle forecasts saved to {OUTPUT_CSV}")
 else:
-    print("\n⚠️ No successful forecasts generated.")
+    print("\n No successful forecasts generated.")
+
