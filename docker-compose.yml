@@ -6,22 +6,22 @@ networks:
 volumes:
   db_data:
   minio_data:
+  trigger_volume: # Shared volume for the trigger file
 
 services:
   postgres:
     image: postgres:16
     restart: unless-stopped
-    env_file: .env
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER:-booklatte}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-booklatte}
     ports:
-      - "${POSTGRES_PORT}:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
-      - ./db/init:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-booklatte}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -30,35 +30,104 @@ services:
   minio:
     image: minio/minio:latest
     restart: unless-stopped
-    env_file: .env
-    command: server /data --console-address ":${MINIO_CONSOLE_PORT}"
+    command: server /data --console-address ":${MINIO_CONSOLE_PORT:-9001}"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-booklatte}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-password}
     ports:
-      - "${MINIO_PORT}:9000"
-      - "${MINIO_CONSOLE_PORT}:${MINIO_CONSOLE_PORT}"
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:${MINIO_CONSOLE_PORT:-9001}"
     volumes:
       - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/ready || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
     networks: [app-net]
 
   keycloak:
     image: quay.io/keycloak/keycloak:24.0
     restart: unless-stopped
-    env_file: .env
-    command:
-      - start-dev
-      - --http-port=${KEYCLOAK_PORT}
-      - --db=postgres
-      - --db-url=jdbc:postgresql://postgres:5432/${KEYCLOAK_DB}
-      - --db-username=${POSTGRES_USER}
-      - --db-password=${POSTGRES_PASSWORD}
+    command: start-dev
     environment:
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-password}
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres
+      KC_DB_URL_DATABASE: ${POSTGRES_DB:-booklatte}
+      KC_DB_USERNAME: ${POSTGRES_USER:-booklatte}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      KC_HTTP_PORT: ${KEYCLOAK_PORT:-8080}
     depends_on:
       postgres:
         condition: service_healthy
     ports:
-      - "${KEYCLOAK_PORT}:${KEYCLOAK_PORT}"
+      - "${KEYCLOAK_PORT:-8080}:${KEYCLOAK_PORT:-8080}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:${KEYCLOAK_PORT:-8080}/health/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks: [app-net]
+
+  backend-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: backend_api
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    env_file:
+      - ./backend/.env
+    environment:
+      # Ensure in-container values point to service names/ports
+      POSTGRES_HOST: postgres
+      MINIO_ENDPOINT: minio:9000
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-http://keycloak:${KEYCLOAK_PORT:-8080}/realms/booklatte}
+      # Optional DB pool tuning (can override in .env)
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
+      DB_POOL_RECYCLE: ${DB_POOL_RECYCLE:-1800}
+      DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-30}
+      TRIGGER_DIR: /app/trigger
+    volumes:
+      - trigger_volume:/app/trigger
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >
+          python -c "import sys,urllib.request; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/openapi.json', timeout=2).status==200 else sys.exit(1)"
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks: [app-net]
+
+  observer:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: observer_service
+    restart: unless-stopped
+    command: python run_observer.py
+    env_file:
+      - ./backend/.env
+    environment:
+      TRIGGER_DIR: /app/trigger
+      MINIO_ENDPOINT: minio:9000
+    volumes:
+      - trigger_volume:/app/trigger
+    depends_on:
+      backend-api:
+        condition: service_healthy
     networks: [app-net]
