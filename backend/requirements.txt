@@ -3,5 +3,14 @@ uvicorn
 minio
 psycopg2-binary
 sqlalchemy
-python-multipart    
-python-dotenv       
+python-multipart
+python-dotenv
+pandas
+numpy
+matplotlib
+scikit-learn
+mlxtend
+statsmodels
+watchdog
+python-jose[cryptography]
+requests
