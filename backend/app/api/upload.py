@@ -37,7 +37,7 @@ def validate_file_type(filename: str) -> bool:
     return ext.lower() in ALLOWED_EXTENSIONS
 
 
-@router.post("/upload")
+@router.post("/")
 async def handle_file_upload(
     files: List[UploadFile] = File(...),
     # The 'Depends' on get_current_user handles JWT validation.

@@ -3,6 +3,7 @@ This module creates and configures the main FastAPI application instance.
 It acts as the central point for assembling the different parts of the API,
 such as routers and middleware.
 """
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import upload  # Import the router from the 'upload.py' API module.
@@ -19,15 +20,14 @@ app = FastAPI(
 # This is crucial for a browser-based frontend.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.cors_origin],  # Allows your frontend's origin
+    allow_origins=settings.cors_origins,  # FIX: use the list from settings
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods (GET, POST, etc.)
     allow_headers=["*"],  # Allows all headers
 )
 
-
 # Include the router from the 'upload' module.
-# ...
+# Tip: To make the final path POST /upload (not /upload/upload), set the route to "/" in upload.py.
 app.include_router(upload.router, prefix="/upload", tags=["Upload"])
 
 # ...

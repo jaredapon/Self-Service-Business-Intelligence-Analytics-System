@@ -20,9 +20,9 @@ engine = create_engine(
     settings.database_url,
     pool_size=settings.db_pool_size,
     max_overflow=settings.db_max_overflow,
-    pool_pre_ping=True,                  # Validate connections before using them
-    pool_recycle=settings.db_pool_recycle,  # Recycle to avoid stale connections
-    pool_timeout=settings.db_pool_timeout,  # Wait time for a connection from the pool
+    pool_pre_ping=True,                      # Validate connections before using them
+    pool_recycle=settings.db_pool_recycle,   # Recycle to avoid stale connections
+    pool_timeout=settings.db_pool_timeout,   # Wait time for a connection from the pool
 )
 
 # Session factory (synchronous)
