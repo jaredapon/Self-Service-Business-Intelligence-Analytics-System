@@ -10,7 +10,7 @@ from app.core.config import settings
 
 if __name__ == "__main__":
     # A simple print statement to confirm that the server is starting and on which address.
-    print(f"Starting API server on {settings.API_HOST}:{settings.API_PORT}...")
+    print(f"Starting API server on {settings.api_host}:{settings.api_port}...")
     
     # This command starts the Uvicorn server.
     uvicorn.run(
