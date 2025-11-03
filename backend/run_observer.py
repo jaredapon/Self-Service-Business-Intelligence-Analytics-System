@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO,
 
 if __name__ == "__main__":
     # Retrieve the directory to watch from the application's central settings.
-    path = settings.TRIGGER_DIR
+    path = settings.trigger_dir
     
     # Defensive check: Ensure the trigger directory exists before starting.
     # This prevents the observer from crashing if the directory is missing on startup.
