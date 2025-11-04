@@ -31,6 +31,34 @@
   margin: 0 auto;
 }
 
+/* Two Column Sections Layout */
+.dataUploadSections {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+  margin-bottom: 2rem;
+}
+
+.dataUploadSection {
+  display: flex;
+  flex-direction: column;
+  min-width: 0; /* Allow content to shrink below natural width */
+  width: 100%; /* Ensure full width of grid cell */
+}
+
+.dataUploadSectionTitle {
+  color: #1a202c;
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-bottom: 0rem;
+}
+
+.dataUploadSectionDescription {
+  color: #718096;
+  font-size: 0.875rem;
+  margin-bottom: 1rem;
+}
+
 /* Error Messages */
 .dataUploadErrorContainer {
   margin-bottom: 1.5rem;
@@ -120,6 +148,8 @@
   padding: 1.5rem;
   margin-bottom: 1.5rem;
   box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+  min-width: 0; /* Allow content to shrink */
+  width: 100%; /* Take full width of parent */
 }
 
 .dataUploadFileListHeader {
@@ -300,8 +330,21 @@
 /* Upload Actions */
 .dataUploadActions {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
   gap: 1rem;
+}
+
+.dataUploadValidationMessage {
+  color: #e53e3e;
+  font-size: 0.875rem;
+  text-align: center;
+  margin: 0;
+  padding: 0.5rem 1rem;
+  background-color: #fff5f5;
+  border: 1px solid #feb2b2;
+  border-radius: 0.375rem;
+  max-width: 600px;
 }
 
 .dataUploadButton {
@@ -353,9 +396,9 @@
   background-color: white;
   border-radius: 0.75rem;
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-  max-width: 500px;
   width: 100%;
-  max-height: 80vh;
+  max-width: 2400px;
+  max-height: 90vh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -459,6 +502,92 @@
   font-size: 0.875rem;
 }
 
+/* Improved Confirmation Modal Styles */
+.dataUploadConfirmContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.dataUploadConfirmCategories {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin-top: 1rem;
+}
+
+.dataUploadConfirmCategory {
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.dataUploadCategoryTitle {
+  background-color: #f7fafc;
+  padding: 1rem 1.25rem;
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: #2d3748;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.dataUploadConfirmCategory ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 350px;
+  overflow-y: auto;
+}
+
+.dataUploadConfirmCategory li {
+  padding: 0.875rem 1.25rem;
+  border-bottom: 1px solid #f1f5f9;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.95rem;
+  word-break: break-word;
+}
+
+.dataUploadConfirmCategory li:last-child {
+  border-bottom: none;
+}
+
+.dataUploadConfirmCategory li svg {
+  flex-shrink: 0;
+  font-size: 1.4rem;
+  color: #4299e1;
+}
+
+.dataUploadEmptyCategory {
+  padding: 2rem 1.5rem;
+  text-align: center;
+  color: #a0aec0;
+  font-style: italic;
+  font-size: 0.95rem;
+}
+
+.dataUploadConfirmContainer hr {
+  border: 0;
+  border-top: 1px solid #e2e8f0;
+  margin: 0.5rem 0;
+}
+
+.dataUploadConfirmContainer p {
+  margin: 0.5rem 0;
+  color: #4a5568;
+  line-height: 1.6;
+}
+
+.dataUploadConfirmContainer strong {
+  color: #2d3748;
+  font-weight: 600;
+}
+
 .dataUploadModalActions {
   display: flex;
   gap: 0.75rem;
@@ -530,11 +659,30 @@
   .dataUploadHeader h1 {
     font-size: 2rem;
   }
+
+  .dataUploadSections {
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
   
   .dataUploadDropZone {
     padding: 2rem 1rem;
   }
+
+  .dataUploadModal {
+    max-width: 95%;
+    max-height: 95vh;
+  }
+
+  .dataUploadConfirmCategories {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
   
+  .dataUploadConfirmCategory ul {
+    max-height: 200px;
+  }
+
   .dataUploadFileItem {
     flex-direction: column;
     align-items: flex-start;
@@ -552,7 +700,7 @@
   .dataUploadModalActions button {
     width: 100%;
   }
-  
+
   .dataUploadConfirmSummary {
     grid-template-columns: 1fr;
   }
