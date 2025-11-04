@@ -257,6 +257,40 @@ def extract():
     sales_files = glob.glob('raw_sales/*.xlsx')
     sales_dfs = [process_sales_file(f) for f in sales_files]
 
+    # --- CHECK FOR DATE RANGE OVERLAPS ---
+    print("\nChecking for date range overlaps in sales files...")
+    file_date_ranges = []
+    for i, (file_path, df) in enumerate(zip(sales_files, sales_dfs)):
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+            valid_dates = df['Date'].dropna()
+            if len(valid_dates) > 0:
+                min_date = valid_dates.min()
+                max_date = valid_dates.max()
+                file_date_ranges.append({
+                    'file': os.path.basename(file_path),
+                    'min_date': min_date,
+                    'max_date': max_date,
+                    'index': i
+                })
+                print(
+                    f"  {os.path.basename(file_path)}: {min_date.strftime('%Y-%m-%d')} to {max_date.strftime('%Y-%m-%d')}")
+
+    # Check for overlaps
+    for i in range(len(file_date_ranges)):
+        for j in range(i + 1, len(file_date_ranges)):
+            range1 = file_date_ranges[i]
+            range2 = file_date_ranges[j]
+            # Check if ranges overlap
+            if range1['min_date'] <= range2['max_date'] and range2['min_date'] <= range1['max_date']:
+                overlap_start = max(range1['min_date'], range2['min_date'])
+                overlap_end = min(range1['max_date'], range2['max_date'])
+                print(f"\nWARNING: Overlap detected!")
+                print(f"  Files: '{range1['file']}' and '{range2['file']}'")
+                print(
+                    f"  Overlap period: {overlap_start.strftime('%Y-%m-%d')} to {overlap_end.strftime('%Y-%m-%d')}")
+    print()
+
     # Align columns across all dataframes
     all_columns = set()
     for df in sales_dfs:
@@ -281,6 +315,39 @@ def extract():
     sales_by_product_files = glob.glob('raw_sales_by_product/*.xlsx')
     sales_by_product_dfs = [process_product_file(
         f) for f in sales_by_product_files]
+
+    # --- CHECK FOR DATE RANGE OVERLAPS ---
+    print("\nChecking for date range overlaps in sales by product files...")
+    product_file_date_ranges = []
+    for i, (file_path, df) in enumerate(zip(sales_by_product_files, sales_by_product_dfs)):
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+            valid_dates = df['Date'].dropna()
+            if len(valid_dates) > 0:
+                min_date = valid_dates.min()
+                max_date = valid_dates.max()
+                product_file_date_ranges.append({
+                    'file': os.path.basename(file_path),
+                    'min_date': min_date,
+                    'max_date': max_date,
+                    'index': i
+                })
+                print(
+                    f"  {os.path.basename(file_path)}: {min_date.strftime('%Y-%m-%d')} to {max_date.strftime('%Y-%m-%d')}")
+
+    # Check for overlaps
+    for i in range(len(product_file_date_ranges)):
+        for j in range(i + 1, len(product_file_date_ranges)):
+            range1 = product_file_date_ranges[i]
+            range2 = product_file_date_ranges[j]
+            if range1['min_date'] <= range2['max_date'] and range2['min_date'] <= range1['max_date']:
+                overlap_start = max(range1['min_date'], range2['min_date'])
+                overlap_end = min(range1['max_date'], range2['max_date'])
+                print(f"\nWARNING: Overlap detected!")
+                print(f"  Files: '{range1['file']}' and '{range2['file']}'")
+                print(
+                    f"  Overlap period: {overlap_start.strftime('%Y-%m-%d')} to {overlap_end.strftime('%Y-%m-%d')}")
+    print()
 
     # Align columns across all product dataframes
     all_product_columns = set()
@@ -566,11 +633,13 @@ def load(combined_df):
         # --- EXCLUDE LAST MONTH ---
         if 'Date' in combined_df.columns:
             # Ensure Date is datetime
-            combined_df['Date'] = pd.to_datetime(combined_df['Date'], errors='coerce')
+            combined_df['Date'] = pd.to_datetime(
+                combined_df['Date'], errors='coerce')
             # Find the latest month in the data
             latest_month = combined_df['Date'].dt.to_period('M').max()
             # Filter out rows from the latest month
-            filtered_df = combined_df[combined_df['Date'].dt.to_period('M') != latest_month].reset_index(drop=True)
+            filtered_df = combined_df[combined_df['Date'].dt.to_period(
+                'M') != latest_month].reset_index(drop=True)
         else:
             filtered_df = combined_df
 
