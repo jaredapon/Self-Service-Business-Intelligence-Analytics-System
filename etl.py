@@ -478,6 +478,86 @@ def transform(sales_df, sales_by_product_df):
     if 'Receipt#' in sales_df.columns:
         sales_df = sales_df.rename(columns={'Receipt#': 'Receipt No'})
 
+    # Deduplicate Sales Transactions
+    print("Checking Sales Transactions for duplicates...")
+    before_sales = len(sales_df)
+
+    if 'Date' in sales_df.columns and 'Receipt No' in sales_df.columns and 'Time' in sales_df.columns:
+        # Detect duplicates before removing
+        dup_keys_sales = ['Date', 'Receipt No', 'Time']
+        sales_dups = sales_df[sales_df.duplicated(
+            subset=dup_keys_sales, keep=False)]
+
+        if not sales_dups.empty:
+            print(
+                f"WARNING: Found {len(sales_dups)} duplicate sales transaction records")
+
+            # --- DEBUGGING: Show affected months ---
+            # dup_months = sales_dups['Date'].dt.to_period('M').value_counts().sort_index()
+            # print(f"Affected months ({len(dup_months)} total):")
+            # for month, count in dup_months.items():
+            #     print(f"{month}: {count} duplicate records")
+
+            # --- DEBUGGING: Show sample duplicates ---
+            # sample_receipt = sales_dups['Receipt No'].iloc[0]
+            # sample_dup = sales_dups[sales_dups['Receipt No'] == sample_receipt]
+            # print(f"\nExample duplicate receipt: {sample_receipt}")
+            # print(f"Appears {len(sample_dup)} times on {sample_dup['Date'].iloc[0]}")
+
+        # Remove duplicates, keeping first occurrence
+        sales_df = sales_df.drop_duplicates(
+            subset=dup_keys_sales, keep='first').reset_index(drop=True)
+        removed_sales = before_sales - len(sales_df)
+
+        if removed_sales > 0:
+            print(
+                f"Removed {removed_sales} duplicate sales records ({removed_sales/before_sales*100:.2f}%)")
+        else:
+            print(
+                f"No duplicates found - all {before_sales} records are unique")
+    else:
+        print("Skipping: Required columns not found")
+
+    # Deduplicate Product Records
+    print("Checking Product Records for duplicates...")
+    before_product = len(sales_by_product_df)
+
+    if all(col in sales_by_product_df.columns for col in ['Date', 'Receipt No', 'Product ID', 'Time']):
+        # Detect duplicates before removing
+        dup_keys_product = ['Date', 'Receipt No', 'Product ID', 'Time']
+        product_dups = sales_by_product_df[sales_by_product_df.duplicated(
+            subset=dup_keys_product, keep=False)]
+
+        if not product_dups.empty:
+            print(
+                f"WARNING: Found {len(product_dups)} duplicate product records")
+
+            # --- DEBUGGING: Show affected months ---
+            # dup_months = product_dups['Date'].dt.to_period('M').value_counts().sort_index()
+            # print(f"Affected months ({len(dup_months)} total):")
+            # for month, count in dup_months.items():
+            #     print(f"{month}: {count} duplicate records")
+
+            # --- DEBUGGING: Show which products are duplicated most ---
+            # dup_products = product_dups.groupby('Product Name').size().sort_values(ascending=False).head(5)
+            # print(f"\nTop 5 duplicated products:")
+            # for product, count in dup_products.items():
+            #     print(f"{product}: {count} duplicate records")
+
+        # Remove duplicates, keeping first occurrence
+        sales_by_product_df = sales_by_product_df.drop_duplicates(
+            subset=dup_keys_product, keep='first').reset_index(drop=True)
+        removed_product = before_product - len(sales_by_product_df)
+
+        if removed_product > 0:
+            print(
+                f"Removed {removed_product} duplicate product records ({removed_product/before_product*100:.2f}%)")
+        else:
+            print(
+                f"No duplicates found - all {before_product} records are unique")
+    else:
+        print("Skipping: Required columns not found")
+
     print("Merging Sales Transaction and Sales by Product List")
     # Merge the two DataFrames on Receipt Number
     if 'Receipt No' in sales_df.columns and 'Receipt No' in sales_by_product_df.columns:
@@ -566,11 +646,13 @@ def load(combined_df):
         # --- EXCLUDE LAST MONTH ---
         if 'Date' in combined_df.columns:
             # Ensure Date is datetime
-            combined_df['Date'] = pd.to_datetime(combined_df['Date'], errors='coerce')
+            combined_df['Date'] = pd.to_datetime(
+                combined_df['Date'], errors='coerce')
             # Find the latest month in the data
             latest_month = combined_df['Date'].dt.to_period('M').max()
             # Filter out rows from the latest month
-            filtered_df = combined_df[combined_df['Date'].dt.to_period('M') != latest_month].reset_index(drop=True)
+            filtered_df = combined_df[combined_df['Date'].dt.to_period(
+                'M') != latest_month].reset_index(drop=True)
         else:
             filtered_df = combined_df
 
