@@ -355,7 +355,7 @@ export const DataUpload: React.FC = () => {
   return (
     <div className={styles.dataUploadContainer}>
       <div className={styles.dataUploadHeader}>
-        <h1>Data Upload Center</h1>
+        <h1>Data Upload</h1>
         <p>Upload your data files for analysis. Supported formats: CSV, Excel (.xls, .xlsx)</p>
       </div>
 
