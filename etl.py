@@ -545,6 +545,46 @@ def transform(sales_df, sales_by_product_df):
     if 'Receipt#' in sales_df.columns:
         sales_df = sales_df.rename(columns={'Receipt#': 'Receipt No'})
 
+    # Deduplicate Sales Transactions
+    print("Checking Sales Transactions for duplicates...")
+    before_sales = len(sales_df)
+
+    if 'Date' in sales_df.columns and 'Receipt No' in sales_df.columns and 'Time' in sales_df.columns:
+        # Detect duplicates before removing
+        dup_keys_sales = ['Date', 'Receipt No', 'Time']
+        sales_dups = sales_df[sales_df.duplicated(
+            subset=dup_keys_sales, keep=False)]
+
+        if not sales_dups.empty:
+            print(
+                f"WARNING: Found {len(sales_dups)} duplicate sales transaction records")
+
+            # --- DEBUGGING: Show affected months ---
+            # dup_months = sales_dups['Date'].dt.to_period('M').value_counts().sort_index()
+            # print(f"Affected months ({len(dup_months)} total):")
+            # for month, count in dup_months.items():
+            #     print(f"{month}: {count} duplicate records")
+
+            # --- DEBUGGING: Show sample duplicates ---
+            # sample_receipt = sales_dups['Receipt No'].iloc[0]
+            # sample_dup = sales_dups[sales_dups['Receipt No'] == sample_receipt]
+            # print(f"\nExample duplicate receipt: {sample_receipt}")
+            # print(f"Appears {len(sample_dup)} times on {sample_dup['Date'].iloc[0]}")
+
+        # Remove duplicates, keeping first occurrence
+        sales_df = sales_df.drop_duplicates(
+            subset=dup_keys_sales, keep='first').reset_index(drop=True)
+        removed_sales = before_sales - len(sales_df)
+
+        if removed_sales > 0:
+            print(
+                f"Removed {removed_sales} duplicate sales records ({removed_sales/before_sales*100:.2f}%)")
+        else:
+            print(
+                f"No duplicates found - all {before_sales} records are unique")
+    else:
+        print("Skipping: Required columns not found")
+
     print("Merging Sales Transaction and Sales by Product List")
     # Merge the two DataFrames on Receipt Number
     if 'Receipt No' in sales_df.columns and 'Receipt No' in sales_by_product_df.columns:
