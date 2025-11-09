@@ -16,9 +16,9 @@ PED_SUMMARY_PATH  = PARENT_DIR + '/ped_output/ped_summary.csv'
 OUTPUT_DIR        = 'holtwinters_results'
 
 # Time-series settings
-AGG_FREQ = 'QE'            # Quarterly frequency
-SEASONAL_PERIODS = 4       # 4 quarters per year
-HORIZON = 4                # Forecast 4 periods ahead
+AGG_FREQ = 'ME'            # Use QE for Quarter-End, ME for Month-End
+SEASONAL_PERIODS = 12       # 4 quarters per year
+HORIZON = 12                # Forecast 4 periods ahead
 
 # Holt-Winters parameters
 OPTIMIZED = False
