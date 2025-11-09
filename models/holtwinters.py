@@ -17,8 +17,8 @@ OUTPUT_DIR        = 'holtwinters_results'
 
 # Time-series settings
 AGG_FREQ = 'ME'            # Use QE for Quarter-End, ME for Month-End
-SEASONAL_PERIODS = 12       # 4 quarters per year
-HORIZON = 12                # Forecast 4 periods ahead
+SEASONAL_PERIODS = 12       # 4 quarters per year, 12 months per year
+HORIZON = 12                # 4 quarters, or 12 months for one year
 
 # Holt-Winters parameters
 OPTIMIZED = False
