@@ -58,10 +58,13 @@ def get_product_info(product_df: pd.DataFrame, product_id: str) -> dict:
         'current_price': safe_float(row['Price'].iloc[0], 0.0)
     }
 
-    # Check if COGS column exists
-    if 'COGS' in row.columns:
-        info['cogs'] = safe_float(
-            row['COGS'].iloc[0], info['current_price'] * DEFAULT_COGS_MULTIPLIER)
+    # Check for product_cost column (from ETL) first, then COGS, then default
+    if 'product_cost' in row.columns and pd.notna(row['product_cost'].iloc[0]):
+        info['cogs'] = safe_float(row['product_cost'].iloc[0],
+                                  info['current_price'] * DEFAULT_COGS_MULTIPLIER)
+    elif 'COGS' in row.columns and pd.notna(row['COGS'].iloc[0]):
+        info['cogs'] = safe_float(row['COGS'].iloc[0],
+                                  info['current_price'] * DEFAULT_COGS_MULTIPLIER)
     else:
         info['cogs'] = info['current_price'] * DEFAULT_COGS_MULTIPLIER
 
@@ -196,12 +199,14 @@ def main():
     out_dir = Path(OUT_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Check if COGS column exists
-    has_cogs_column = 'COGS' in product_df.columns
-    if not has_cogs_column:
-        print(f"Warning: 'COGS' column not found in product dimension.")
+    # Check if cost column exists
+    has_cost_column = 'product_cost' in product_df.columns or 'COGS' in product_df.columns
+    if not has_cost_column:
+        print(f"Warning: 'product_cost' or 'COGS' column not found in product dimension.")
         print(
             f"Using default COGS = {DEFAULT_COGS_MULTIPLIER*100}% of current price.\n")
+    elif 'product_cost' in product_df.columns:
+        print(f"[INFO] Using 'product_cost' column from ETL output.\n")
 
     # Process each bundle from PED results
     results = []

@@ -204,6 +204,88 @@ def create_product_dimensions(combined_df):
             current_product_dim['CATEGORY'] = current_product_dim.apply(
                 classify_category_row, axis=1)
 
+        # ------------------------------------------------------------------
+        # Add product_cost column (COGS calculation)
+        # ------------------------------------------------------------------
+        def normalize_drink_name(name: str) -> str:
+            """Normalize drink name for matching"""
+            # Expand common abbreviations
+            name = name.replace('CAR ', 'CARAMEL ')
+            return name.upper().replace(' ', '').replace('OZ', '').replace('CHOCO', 'CHOCOLATE')
+
+        def get_drink_cost(product_name: str) -> float:
+            """Get cost from costing file sheets. Returns None if not found."""
+            try:
+                costing_files = glob.glob('raw_costing/*.xlsx')
+                if not costing_files:
+                    return None
+                xl = pd.ExcelFile(costing_files[0])
+
+                product_norm = normalize_drink_name(product_name)
+
+                # Find best match by counting matching keywords
+                best_match = None
+                best_score = 0
+
+                for sheet in xl.sheet_names:
+                    sheet_norm = normalize_drink_name(sheet)
+                    score = 0
+
+                    # Check for drink name keywords (at least 4 chars to avoid false matches)
+                    for word in product_norm.split():
+                        if len(word) >= 4 and word in sheet_norm:
+                            score += 2
+
+                    # Check for size (8, 12, 16)
+                    for size in ['8', '12', '16']:
+                        if size in product_norm and size in sheet_norm:
+                            score += 1
+                            break
+
+                    # Check for temperature
+                    if 'HOT' in product_norm and 'HOT' in sheet_norm:
+                        score += 1
+                    elif ('ICED' in product_norm or 'COLD' in product_norm) and 'ICED' in sheet_norm:
+                        score += 1
+
+                    # Update best match if score is higher
+                    if score > best_score:
+                        best_score = score
+                        best_match = sheet
+
+                # Only use match if score is decent (at least 2 points)
+                if best_match and best_score >= 2:
+                    df = pd.read_excel(
+                        costing_files[0], sheet_name=best_match, header=None)
+                    # Row 35 = "Total Cost", find first numeric value (usually col 14)
+                    if len(df) > 35:
+                        row_35 = df.iloc[35]
+                        for col in range(1, len(row_35)):
+                            if pd.notna(row_35[col]) and isinstance(row_35[col], (int, float)):
+                                return round(float(row_35[col]), 2)
+            except Exception as e:
+                pass
+            return None
+
+        def calculate_cost(row):
+            """Calculate COGS: actual cost for DRINK, else 60% of Price"""
+            if row.get('CATEGORY') == 'DRINK':
+                cost = get_drink_cost(row.get('product_name', ''))
+                if cost:
+                    return cost
+            return round(row['Price'] * 0.60, 2) if pd.notna(row.get('Price')) else np.nan
+
+        current_product_dim['product_cost'] = current_product_dim.apply(
+            calculate_cost, axis=1)
+
+        # Reorder columns: place product_cost immediately after Price
+        if 'Price' in current_product_dim.columns and 'product_cost' in current_product_dim.columns:
+            cols = list(current_product_dim.columns)
+            cols.remove('product_cost')
+            insert_pos = cols.index('Price') + 1
+            cols.insert(insert_pos, 'product_cost')
+            current_product_dim = current_product_dim[cols]
+
         # Product History Dimension
         # Get all unique combinations of product attributes over time
         history_product_dim = df[available_product_columns].copy()
@@ -233,6 +315,18 @@ def create_product_dimensions(combined_df):
                 compute_parent_sku)
             history_product_dim['CATEGORY'] = history_product_dim.apply(
                 classify_category_row, axis=1)
+
+        # Add product_cost to history dimension
+        history_product_dim['product_cost'] = history_product_dim.apply(
+            calculate_cost, axis=1)
+
+        # Reorder columns for history dimension
+        if 'Price' in history_product_dim.columns and 'product_cost' in history_product_dim.columns:
+            cols = list(history_product_dim.columns)
+            cols.remove('product_cost')
+            insert_pos = cols.index('Price') + 1
+            cols.insert(insert_pos, 'product_cost')
+            history_product_dim = history_product_dim[cols]
 
         # Rename Date for history dimension
         if 'Date' in history_product_dim.columns:
