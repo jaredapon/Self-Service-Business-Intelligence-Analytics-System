@@ -13,12 +13,13 @@ RULES_PATH        = PARENT_DIR + '/association_rules.csv'
 FACT_PATH         = 'etl_dimensions/fact_transaction_dimension.csv'
 PRODUCT_PATH      = 'etl_dimensions/current_product_dimension.csv'
 PED_SUMMARY_PATH  = PARENT_DIR + '/ped_output/ped_summary.csv'
+NLP_OPT_PATH      = PARENT_DIR + '/nlp_output/nlp_optimization_results.csv'
 OUTPUT_DIR        = 'holtwinters_results'
 
 # Time-series settings
-AGG_FREQ = 'ME'            # Use QE for Quarter-End, ME for Month-End
-SEASONAL_PERIODS = 12       # 4 quarters per year, 12 months per year
-HORIZON = 12                # 4 quarters, or 12 months for one year
+AGG_FREQ = 'QE'            # Quarterly frequency
+SEASONAL_PERIODS = 4       # 4 quarters per year
+HORIZON = 4                # Forecast 4 periods ahead
 
 # Holt-Winters parameters
 OPTIMIZED = False
@@ -26,7 +27,7 @@ HW_ALPHA = 0.2
 HW_BETA  = 0.2
 HW_GAMMA = 0.2
 
-# Price scenario
+# Price scenario (fallback)
 DISCOUNT_RATE = 0.05
 
 # =========================
@@ -71,17 +72,6 @@ def fit_and_forecast_to_index(series: pd.Series, label: str, idx: pd.DatetimeInd
     fc.index = idx
     return fc
 
-def detect_trend(series: pd.Series, label: str) -> str:
-    if series is None or len(series) < 2:
-        return f"{label}: No data"
-    first_val, last_val = series.iloc[0], series.iloc[-1]
-    if last_val > first_val * 1.05:
-        return f"{label}: Upward trend"
-    elif last_val < first_val * 0.95:
-        return f"{label}: Downward trend"
-    else:
-        return f"{label}: Relatively flat trend"
-
 def build_ts_all(lines: pd.DataFrame, AGG_FREQ: str) -> pd.Series:
     if lines.empty:
         return pd.Series(dtype=float)
@@ -90,19 +80,22 @@ def build_ts_all(lines: pd.DataFrame, AGG_FREQ: str) -> pd.Series:
     return rec.groupby(pd.Grouper(key='Date', freq=AGG_FREQ)).size()
 
 # =========================
-# LOAD GLOBAL DATA
+# LOAD DATA
 # =========================
 try:
-    rules_df = pd.read_csv(RULES_PATH)
-    fact_df = pd.read_csv(FACT_PATH)
+    rules_df   = pd.read_csv(RULES_PATH)
+    fact_df    = pd.read_csv(FACT_PATH)
     product_df = pd.read_csv(PRODUCT_PATH)
-    ped_df = pd.read_csv(PED_SUMMARY_PATH)
+    ped_df     = pd.read_csv(PED_SUMMARY_PATH)
+    nlp_opt_df = pd.read_csv(NLP_OPT_PATH)
 except FileNotFoundError as e:
     print(f"Error loading required data: {e}")
     sys.exit(1)
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 all_results = []
+
+nlp_opt_indexed = nlp_opt_df.set_index('bundle_id')
 
 # =========================
 # LOOP THROUGH ALL BUNDLE ROWS
@@ -111,17 +104,16 @@ for idx, rule_row in rules_df.iterrows():
     try:
         product_a_name = str(rule_row['antecedents_names'])
         product_b_name = str(rule_row['consequents_names'])
-        # --- Add bundle_id and category if present ---
         bundle_id = rule_row['bundle_id'] if 'bundle_id' in rule_row else ""
-        category = rule_row['category'] if 'category' in rule_row else ""
+        category  = rule_row['category'] if 'category' in rule_row else ""
+
         print(f"\n==============================")
         print(f"Processing bundle row {idx}: {product_a_name} + {product_b_name}")
+        print(f"Bundle ID: {bundle_id}")
         print(f"==============================")
 
-        # --- Resolve IDs ---
         product_a_id, product_b_id = resolve_ids(product_df, product_a_name, product_b_name)
 
-        # --- PED row ---
         ped_row = pick_ped_row(ped_df, product_a_id, product_b_id)
         if ped_row is None:
             print(f" Skipping {product_a_name} + {product_b_name}: No PED match.")
@@ -130,9 +122,7 @@ for idx, rule_row in rules_df.iterrows():
         epsilon   = float(ped_row.get('elasticity_epsilon', 0.0) or 0.0)
         intercept = float(ped_row.get('intercept_logk', 0.0) or 0.0)
         n_points  = int(ped_row.get('n_price_points', 0) or 0)
-        mode_used = str(ped_row.get('mode', ''))
 
-        # --- Historical sales series ---
         pair_transactions = fact_df[fact_df['Product ID'].astype(str).isin([product_a_id, product_b_id])]
         receipt_products = pair_transactions.groupby('Receipt No')['Product ID'].apply(lambda s: set(s.astype(str)))
         receipts_with_both = receipt_products[
@@ -156,15 +146,29 @@ for idx, rule_row in rules_df.iterrows():
             print(" No sales data found. Skipping.")
             continue
 
-        # --- Price & elasticity scenario ---
-        current_price_a = float(product_df.loc[product_df['product_id'].astype(str) == str(product_a_id), 'Price'].iloc[0])
-        current_price_b = float(product_df.loc[product_df['product_id'].astype(str) == str(product_b_id), 'Price'].iloc[0])
+        current_price_a = float(
+            product_df.loc[product_df['product_id'].astype(str) == str(product_a_id), 'Price'].iloc[0]
+        )
+        current_price_b = float(
+            product_df.loc[product_df['product_id'].astype(str) == str(product_b_id), 'Price'].iloc[0]
+        )
         current_price = current_price_a + current_price_b
-        new_price = current_price * (1 - DISCOUNT_RATE)
+
+        recommended_price = None
+        if bundle_id and bundle_id in nlp_opt_indexed.index:
+            try:
+                recommended_price = float(nlp_opt_indexed.loc[bundle_id, 'bundle_price_recommended'])
+            except KeyError:
+                recommended_price = None
+
+        if recommended_price is not None and not np.isnan(recommended_price):
+            new_price = recommended_price
+        else:
+            new_price = current_price * (1 - DISCOUNT_RATE)
+
         price_ratio = new_price / current_price if current_price > 0 else 1.0
         demand_multiplier = price_ratio ** epsilon if current_price > 0 else 1.0
 
-        # --- Forecast index ---
         if AGG_FREQ.upper().startswith('Q'):
             step = pd.offsets.QuarterEnd()
         elif AGG_FREQ.upper().startswith('M'):
@@ -182,7 +186,6 @@ for idx, rule_row in rules_df.iterrows():
         ])
         COMMON_FC_INDEX = pd.date_range(start=latest_actual + step, periods=HORIZON, freq=AGG_FREQ)
 
-        # --- Forecasts ---
         bundle_fc_raw = fit_and_forecast_to_index(bundle_sales_ts, "Bundle", COMMON_FC_INDEX)
         a_fc_all_raw = fit_and_forecast_to_index(a_ts_all, f"{product_a_name}", COMMON_FC_INDEX)
         b_fc_all_raw = fit_and_forecast_to_index(b_ts_all, f"{product_b_name}", COMMON_FC_INDEX)
@@ -192,27 +195,26 @@ for idx, rule_row in rules_df.iterrows():
         a_fc_all = a_fc_all_raw.clip(lower=0)
         b_fc_all = b_fc_all_raw.clip(lower=0)
 
-        # --- Cannibalization ---
         cannibalization_units = bundle_fc
         a_fc_after_aligned = (a_fc_all - cannibalization_units).clip(lower=0)
         b_fc_after_aligned = (b_fc_all - cannibalization_units).clip(lower=0)
 
-        # --- Revenue impact ---
-        def revenue_forecast(series, price): return series * price
+        def revenue_forecast(series, price):
+            return series * price
+
         price_a, price_b = current_price_a, current_price_b
 
         rev_a_before = revenue_forecast(a_fc_all, price_a)
         rev_b_before = revenue_forecast(b_fc_all, price_b)
-        rev_a_after = revenue_forecast(a_fc_after_aligned, price_a)
-        rev_b_after = revenue_forecast(b_fc_after_aligned, price_b)
+        rev_a_after  = revenue_forecast(a_fc_after_aligned, price_a)
+        rev_b_after  = revenue_forecast(b_fc_after_aligned, price_b)
         rev_bundle_after = bundle_fc_adj * new_price
 
         overall_before = rev_a_before.sum() + rev_b_before.sum()
-        overall_after = rev_a_after.sum() + rev_b_after.sum() + rev_bundle_after.sum()
+        overall_after  = rev_a_after.sum() + rev_b_after.sum() + rev_bundle_after.sum()
         impact_abs = overall_after - overall_before
         impact_pct = (impact_abs / overall_before * 100.0) if overall_before != 0 else np.nan
 
-        # --- Collect results ---
         df_points = pd.DataFrame({
             'Bundle_Units': bundle_sales_ts,
             'Antecedent_Units': a_ts_all,
@@ -229,13 +231,16 @@ for idx, rule_row in rules_df.iterrows():
         df_all = pd.concat([df_points, df_forecast], axis=0)
         df_all.index.name = 'Date'
         df_all['bundle_row'] = idx
-        df_all['bundle_id'] = bundle_id           # <-- Add bundle_id
-        df_all['category'] = category             # <-- Add category
-        # Remove columns: antecedent_name, consequent_name, elasticity_epsilon, intercept_logk, revenue_impact_abs, revenue_impact_pct
-        # (Do not add them at all)
+        df_all['bundle_id'] = bundle_id
+        df_all['category']  = category
+
         all_results.append(df_all)
 
-        print(f" Done: {product_a_name} + {product_b_name} | Impact: {impact_abs:.2f} ({impact_pct:.1f}%)")
+        print(
+            f"Original Price: {current_price:.2f} | "
+            f"Recommended Price: {new_price:.2f} | "
+            f"Impact: {impact_abs:.2f} ({impact_pct:.1f}%)"
+        )
 
     except Exception as e:
         print(f" Error in row {idx}: {e}")
@@ -246,7 +251,6 @@ for idx, rule_row in rules_df.iterrows():
 # =========================
 if all_results:
     combined_df = pd.concat(all_results)
-    # Drop columns if they somehow exist (defensive, in case of legacy code)
     drop_cols = [
         'antecedent_name', 'consequent_name',
         'elasticity_epsilon', 'intercept_logk',
@@ -258,4 +262,3 @@ if all_results:
     print(f"\n All bundle forecasts saved to {OUTPUT_CSV}")
 else:
     print("\n No successful forecasts generated.")
-
