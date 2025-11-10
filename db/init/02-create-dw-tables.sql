@@ -30,11 +30,16 @@ CREATE TABLE IF NOT EXISTS time_dimension (
     time_desc VARCHAR(255),
     time_level INT,
     parent_id VARCHAR(32),
-    FOREIGN KEY (parent_id) REFERENCES time_dimension(time_id)
+);
+
+-- Market Basket Analysis Tables
+CREATE TABLE transaction_records (
+    "Receipt No" INT PRIMARY KEY NOT NULL,
+    "SKU" TEXT
 );
 
 --Fact Tables   
-CREATE TABLE IF NOT EXISTS fact_transactions (
+CREATE TABLE IF NOT EXISTS fact_transaction_dimension (
     date DATE,
     time_id VARCHAR(32),
     receipt_no INT,
