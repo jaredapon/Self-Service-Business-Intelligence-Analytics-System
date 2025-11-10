@@ -1,86 +1,21 @@
-# Market Basket Analysis - Properly Optimized Version
-# Used FP-Growth algorithm to find frequent itemsets and association rules
-
 import pandas as pd
 from mlxtend.frequent_patterns import fpgrowth, association_rules
 import time
-from io import BytesIO
 
-# --- New Imports for MinIO ---
-from minio import MinIO
-from minio.error import S3Error
+# --- Import the new loader service ---
+from app.pipeline import loader
 from app.core.config import settings
 
-# --- New: MinIO Client Initialization ---
-try:
-    minio_client = Minio(
-        settings.minio_endpoint,
-        access_key=settings.minio_access,
-        secret_key=settings.minio_secret,
-        secure=settings.minio_secure,
-    )
-    print("✅ Successfully connected to MinIO.")
-except Exception as e:
-    print(f"❌ Failed to connect to MinIO: {e}")
-    minio_client = None
-
-# =========================
-# NEW HELPERS: MINIO I/O
-# =========================
-
-def get_csv_from_minio(bucket, object_name):
-    """Downloads a CSV file from MinIO and returns it as a pandas DataFrame."""
-    if not minio_client:
-        print(f"MinIO client not available. Cannot download {object_name}.")
-        return pd.DataFrame()  # Return empty DataFrame on failure
-    
-    try:
-        print(f"  Downloading: {bucket}/{object_name}")
-        response = minio_client.get_object(bucket, object_name)
-        file_content = BytesIO(response.read())
-        df = pd.read_csv(file_content)
-        response.close()
-        response.release_conn()
-        return df
-    except S3Error as e:
-        print(f"Error getting file from MinIO at {bucket}/{object_name}: {e}")
-        return pd.DataFrame()
-
-def upload_df_to_minio(df, bucket, object_name):
-    """Uploads a pandas DataFrame as a CSV to MinIO."""
-    if not minio_client:
-        print("MinIO client not available. Skipping upload.")
-        return
-
-    csv_bytes = df.to_csv(index=False).encode('utf-8')
-    csv_buffer = BytesIO(csv_bytes)
-    
-    try:
-        minio_client.put_object(
-            bucket,
-            object_name,
-            data=csv_buffer,
-            length=len(csv_bytes),
-            content_type='application/csv'
-        )
-        print(f"  Successfully uploaded to: {bucket}/{object_name}")
-    except S3Error as e:
-        print(f"Error uploading {object_name} to MinIO: {e}")
-
+# --- REMOVE MINIO CLIENT AND HELPERS FROM THIS FILE ---
 
 start_time = time.time()
-print("Loading transaction data from MinIO staging bucket...")
-df = get_csv_from_minio(
-    settings.minio_staging_bucket,
-    'transaction_records.csv'
-)
+print("Loading transaction data from database...")
+df = loader.read_sql_to_df('transaction_records')
 
 # Load product dimension
-print("Loading product dimension from MinIO staging bucket...")
-prod_dim = get_csv_from_minio(
-    settings.minio_staging_bucket,
-    'current_product_dimension.csv'
-)
+print("Loading product dimension from database...")
+prod_dim = loader.read_sql_to_df('current_product_dimension')
+
 # Ensure product_id is string type after loading
 if 'product_id' in prod_dim.columns:
     prod_dim['product_id'] = prod_dim['product_id'].astype(str)
@@ -311,7 +246,7 @@ if 'prod_dim' in locals() and not prod_dim.empty and not df.empty:
     all_rules = run_mba_for_meal(all_rules)
 
     print("\nUploading final association rules to MinIO staging bucket...")
-    upload_df_to_minio(
+    loader.upload_df_to_minio(
         all_rules,
         settings.minio_staging_bucket,
         'association_rules.csv'
@@ -319,7 +254,7 @@ if 'prod_dim' in locals() and not prod_dim.empty and not df.empty:
 
     print(f"\nResults exported successfully to MinIO.")
 else:
-    print("Product dimension or transaction data not loaded correctly from MinIO; cannot run MBA.")
+    print("Product dimension or transaction data not loaded correctly from database; cannot run MBA.")
 
 end_time = time.time()
 print(f"\nTotal execution time: {end_time - start_time:.2f} seconds")
