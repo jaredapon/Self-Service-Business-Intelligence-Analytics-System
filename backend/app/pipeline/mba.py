@@ -1,23 +1,24 @@
-# Market Basket Analysis - Properly Optimized Version
-# Used FP-Growth algorithm to find frequent itemsets and association rules
-
 import pandas as pd
 from mlxtend.frequent_patterns import fpgrowth, association_rules
-import os
 import time
 
-pd.set_option('display.max_rows', None)
-pd.set_option('display.max_columns', None)
-pd.set_option('display.width', 500)
-pd.set_option('display.max_colwidth', 500)
+# --- Import the new loader service ---
+from app.pipeline import loader
+from app.core.config import settings
+
+# --- REMOVE MINIO CLIENT AND HELPERS FROM THIS FILE ---
 
 start_time = time.time()
-print("Loading transaction data...")
-df = pd.read_csv('etl_dimensions/transaction_records.csv')
+print("Loading transaction data from database...")
+df = loader.read_sql_to_df('transaction_records')
 
 # Load product dimension
-print("Loading product dimension...")
-prod_dim = pd.read_csv('etl_dimensions/current_product_dimension.csv', dtype={'product_id': str})
+print("Loading product dimension from database...")
+prod_dim = loader.read_sql_to_df('current_product_dimension')
+
+# Ensure product_id is string type after loading
+if 'product_id' in prod_dim.columns:
+    prod_dim['product_id'] = prod_dim['product_id'].astype(str)
 
 # Create lookup dictionaries (OPTIMIZED: done once)
 id_to_name = dict(zip(prod_dim['product_id'], prod_dim['product_name']))
@@ -75,9 +76,9 @@ def remove_reversed_rule_duplicates(df):
             keep_rows.append(row)
     return pd.DataFrame(keep_rows)
 
-def run_mba_for_category(category_name, output_folder, all_rules):
+def run_mba_for_category(category_name, all_rules):
     print(f"\n--- Running MBA for category: {category_name} ---")
-    os.makedirs(output_folder, exist_ok=True)
+    # No longer need to create local directories
 
     # Filter product dimension for the target category
     cat_rows = prod_dim[prod_dim['CATEGORY'] == category_name]
@@ -159,9 +160,9 @@ def run_mba_for_category(category_name, output_folder, all_rules):
 
     return all_rules
 
-def run_mba_for_meal(output_folder, all_rules):
+def run_mba_for_meal(all_rules):
     print(f"\n--- Running MBA for MEAL (FOOD <-> DRINK) ---")
-    os.makedirs(output_folder, exist_ok=True)
+    # No longer need to create local directories
 
     # Only keep transactions that have at least one FOOD and one DRINK item
     def has_food_and_drink(pid_string):
@@ -237,21 +238,23 @@ def run_mba_for_meal(output_folder, all_rules):
     return all_rules
 
 # Main execution
-if 'prod_dim' in locals():
-    output_folder = 'mba_output'
-    os.makedirs(output_folder, exist_ok=True)
+if 'prod_dim' in locals() and not prod_dim.empty and not df.empty:
     all_rules = pd.DataFrame()
     
-    all_rules = run_mba_for_category('FOOD', output_folder, all_rules)
-    all_rules = run_mba_for_category('DRINK', output_folder, all_rules)
-    all_rules = run_mba_for_meal(output_folder, all_rules)
+    all_rules = run_mba_for_category('FOOD', all_rules)
+    all_rules = run_mba_for_category('DRINK', all_rules)
+    all_rules = run_mba_for_meal(all_rules)
 
-    association_rules_csv_path = os.path.join(output_folder, 'association_rules.csv')
-    all_rules.to_csv(association_rules_csv_path, index=False)
+    print("\nUploading final association rules to MinIO staging bucket...")
+    loader.upload_df_to_minio(
+        all_rules,
+        settings.minio_staging_bucket,
+        'association_rules.csv'
+    )
 
-    print(f"\nResults exported successfully to {output_folder}")
+    print(f"\nResults exported successfully to MinIO.")
 else:
-    print("Product dimension not loaded; cannot run category-specific MBA.")
+    print("Product dimension or transaction data not loaded correctly from database; cannot run MBA.")
 
 end_time = time.time()
 print(f"\nTotal execution time: {end_time - start_time:.2f} seconds")

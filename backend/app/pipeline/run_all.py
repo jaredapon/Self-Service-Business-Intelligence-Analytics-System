@@ -5,15 +5,14 @@ of the pipeline in the correct sequence.
 """
 
 import logging
+import time
 
 # --- Import your actual pipeline scripts ---
-# These are commented out as they are placeholders. When you implement the logic
-# for each step, you will create the corresponding .py files (e.g., etl.py)
-# and uncomment these lines.
-# from . import etl
-# from . import mba
-# from . import ped
-# from . import holt_winters
+from . import etl
+from . import mba
+from . import ped
+from . import nlp
+from . import holtwinters
 
 def execute_pipeline():
     """
@@ -21,35 +20,39 @@ def execute_pipeline():
     1. ETL (Extract, Transform, Load)
     2. MBA (Market Basket Analysis)
     3. PED (Price Elasticity of Demand)
-    4. Holt-Winters (Forecasting)
+    4. NLP (Non-Linear Programming for Price Optimization)
+    5. Holt-Winters (Forecasting)
     """
     logger = logging.getLogger(__name__)
     
+    pipeline_steps = [
+        ("ETL", etl.main),
+        ("MBA", mba.main),
+        ("PED", ped.main),
+        ("NLP", nlp.main),
+        ("Holt-Winters", holtwinters.main),
+    ]
+
+    total_start_time = time.time()
+    logger.info("--- Starting full data pipeline execution ---")
+
     try:
-        # Step 1: Run the ETL process.
-        logger.info("Step 1/4: Running ETL...")
-        # etl.run() # Placeholder for the actual ETL function call.
-        print("... (Skipping ETL logic) ...")
-        
-        # Step 2: Run the Market Basket Analysis.
-        logger.info("Step 2/4: Running MBA...")
-        # mba.run() # Placeholder for the actual MBA function call.
-        print("... (Skipping MBA logic) ...")
-        
-        # Step 3: Run the Price Elasticity of Demand analysis.
-        logger.info("Step 3/4: Running PED...")
-        # ped.run() # Placeholder for the actual PED function call.
-        print("... (Skipping PED logic) ...")
-        
-        # Step 4: Run the Holt-Winters forecasting model.
-        logger.info("Step 4/4: Running Holt-Winters...")
-        # holt_winters.run() # Placeholder for the actual Holt-Winters function call.
-        print("... (Skipping Holt-Winters logic) ...")
-        
-        logger.info("All pipeline steps completed successfully.")
+        for i, (name, func) in enumerate(pipeline_steps):
+            step_start_time = time.time()
+            logger.info(f"--- Step {i+1}/{len(pipeline_steps)}: Running {name}... ---")
+            
+            func() # Execute the main function of the script
+            
+            step_duration = time.time() - step_start_time
+            logger.info(f"--- Step {i+1}/{len(pipeline_steps)}: {name} completed in {step_duration:.2f} seconds. ---")
+
+        total_duration = time.time() - total_start_time
+        logger.info(f"--- Full data pipeline completed successfully in {total_duration:.2f} seconds. ---")
         
     except Exception as e:
         # If any step in the pipeline fails, log the error and re-raise the exception.
         # This ensures the failure is recorded and can be handled by the calling service (the observer).
-        logger.error(f"Error during pipeline execution: {e}")
+        logger.error(f"--- Error during pipeline execution at step '{name}': {e} ---")
+        import traceback
+        traceback.print_exc()
         raise e
