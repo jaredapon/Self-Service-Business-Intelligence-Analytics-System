@@ -3,16 +3,16 @@
 
 -- Result Tables for Advanced Analytics
 CREATE TABLE IF NOT EXISTS holtwinters_results (
-    date DATE,
-    bundle_units FLOAT,
-    antecedent_units FLOAT,
-    consequent_units FLOAT,
-    bundle_units_forecast FLOAT,
-    bundle_units_adjusted_forecast FLOAT,
-    antecedent_units_forecast FLOAT,
-    antecedent_units_after_cannibalization FLOAT,
-    consequent_units_forecast FLOAT,
-    consequent_units_after_cannibalization FLOAT,
+    "Date" DATE,
+    "Bundle_Units" FLOAT,
+    "Antecedent_Units" FLOAT,
+    "Consequent_Units" FLOAT,
+    "Bundle_Units_Forecast" FLOAT,
+    "Bundle_Units_Adjusted_Forecast" FLOAT,
+    "Antecedent_Units_Forecast" FLOAT,
+    "Antecedent_Units_After_Cannibalization" FLOAT,
+    "Consequent_Units_Forecast" FLOAT,
+    "Consequent_Units_After_Cannibalization" FLOAT,
     bundle_row INTEGER,
     bundle_id VARCHAR(16),
     category VARCHAR(32)
@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS association_rules (
     lift FLOAT,
     leverage FLOAT,
     conviction FLOAT,
+    combined_score FLOAT,
     category VARCHAR(32)
 );
 
@@ -58,7 +59,7 @@ CREATE TABLE IF NOT EXISTS nlp_optimization_results (
     product_b_cogs DECIMAL(10, 2),
     cogs_total DECIMAL(10, 2),
     elasticity_epsilon DOUBLE PRECISION,
-    base_demand_K DOUBLE PRECISION,
+    "base_demand_K" DOUBLE PRECISION,
     r_squared DOUBLE PRECISION,
     n_points INTEGER,
     bundle_price_recommended DECIMAL(10, 2),
