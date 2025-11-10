@@ -4,6 +4,13 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from statsmodels.tsa.statespace.sarimax import SARIMAX
+import warnings
+
+# Suppress SARIMAX warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", message="Too few observations")
+warnings.filterwarnings(
+    "ignore", message="Maximum Likelihood optimization failed")
 
 # =========================
 # USER CONFIGURATION

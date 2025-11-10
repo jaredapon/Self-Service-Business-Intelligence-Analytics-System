@@ -6,15 +6,19 @@ import sys
 import warnings
 
 warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", message="Too few observations")
+warnings.filterwarnings(
+    "ignore", message="Maximum Likelihood optimization failed")
 
 # =========================
 # USER CONFIGURATION
 # =========================
-PARENT_DIR        = 'mba_meal'
-RULES_PATH        = PARENT_DIR + '/association_rules.csv'
-FACT_PATH         = 'etl_dimensions/fact_transaction_dimension.csv'
-PRODUCT_PATH      = 'etl_dimensions/current_product_dimension.csv'
-PED_SUMMARY_PATH  = PARENT_DIR + '/ped_output/ped_summary.csv'   # <— from the standalone PED script
+PARENT_DIR = 'mba_output'
+RULES_PATH = PARENT_DIR + '/association_rules.csv'
+FACT_PATH = 'etl_dimensions/fact_transaction_dimension.csv'
+PRODUCT_PATH = 'etl_dimensions/current_product_dimension.csv'
+PED_SUMMARY_PATH = PARENT_DIR + '/ped_output/ped_summary.csv'
 
 TOP_N = 15
 
@@ -25,23 +29,27 @@ HORIZON = 4
 SARIMA_ORDER = (1, 1, 1)
 SARIMA_SEASONAL_ORDER = (1, 1, 1, SEASONAL_PERIODS)
 
-DISCOUNT_PCT    = 0.10
+DISCOUNT_PCT = 0.10
 FORCE_NEW_PRICE = None
 
-OUTPUT_CSV = 'mba_meal/bundle_sarima_summary.csv'
+OUTPUT_DIR = 'mba_output'  # Output directory for category-based CSVs
 
 # =========================
 # Utils
 # =========================
+
+
 def cap(s: str, n: int = 50) -> str:
     s = "" if s is None else str(s)
     return s if len(s) <= n else s[:n-1] + "…"
+
 
 def require_columns(df: pd.DataFrame, cols: list[str], df_name: str):
     missing = [c for c in cols if c not in df.columns]
     if missing:
         print(f"Error: {df_name} is missing required columns: {missing}")
         sys.exit(1)
+
 
 def resolve_ids_by_exact_names(rule_row: pd.Series, product_df: pd.DataFrame) -> tuple[str | None, str | None]:
     nameA = rule_row.get('antecedents_names', None)
@@ -54,6 +62,7 @@ def resolve_ids_by_exact_names(rule_row: pd.Series, product_df: pd.DataFrame) ->
         return None, None
     return str(a_match['product_id'].iloc[0]), str(b_match['product_id'].iloc[0])
 
+
 def build_ts_receipt_presence(lines: pd.DataFrame, freq: str) -> pd.Series:
     if lines.empty:
         return pd.Series(dtype=float)
@@ -63,21 +72,30 @@ def build_ts_receipt_presence(lines: pd.DataFrame, freq: str) -> pd.Series:
     ts.index = pd.to_datetime(ts.index)
     return ts
 
+
 def bundle_baseline_series(fact_df: pd.DataFrame, id_a: str, id_b: str, freq: str) -> pd.Series:
-    sub = fact_df[fact_df['Product ID'].astype(str).isin([str(id_a), str(id_b)])]
-    receipt_products = sub.groupby('Receipt No')['Product ID'].apply(lambda s: set(s.astype(str)))
-    both_receipts_idx = receipt_products[receipt_products.apply(lambda s: (str(id_a) in s) and (str(id_b) in s))].index
+    sub = fact_df[fact_df['Product ID'].astype(
+        str).isin([str(id_a), str(id_b)])]
+    receipt_products = sub.groupby('Receipt No')['Product ID'].apply(
+        lambda s: set(s.astype(str)))
+    both_receipts_idx = receipt_products[receipt_products.apply(
+        lambda s: (str(id_a) in s) and (str(id_b) in s))].index
 
     working_df = fact_df[fact_df['Receipt No'].isin(both_receipts_idx)]
-    receipt_summary = working_df.groupby('Receipt No').agg(Date=('Date', 'first'))
+    receipt_summary = working_df.groupby(
+        'Receipt No').agg(Date=('Date', 'first'))
 
-    receipt_summary['Date'] = pd.to_datetime(receipt_summary['Date'], errors='coerce')
-    bundle_ts = receipt_summary.groupby(pd.Grouper(key='Date', freq=freq)).size().astype(float)
+    receipt_summary['Date'] = pd.to_datetime(
+        receipt_summary['Date'], errors='coerce')
+    bundle_ts = receipt_summary.groupby(pd.Grouper(
+        key='Date', freq=freq)).size().astype(float)
     bundle_ts.index = pd.to_datetime(bundle_ts.index)
     return bundle_ts
 
+
 def _last_index_or_min(ts: pd.Series) -> pd.Timestamp:
     return ts.index[-1] if (ts is not None and not ts.empty) else pd.Timestamp.min
+
 
 def _next_step_offset(freq: str):
     if freq.upper().startswith('Q'):
@@ -87,6 +105,7 @@ def _next_step_offset(freq: str):
     else:
         return pd.tseries.frequencies.to_offset(freq)
 
+
 def build_common_fc_index(a_ts: pd.Series, b_ts: pd.Series, bundle_ts: pd.Series,
                           freq: str, horizon: int) -> pd.DatetimeIndex:
     step = _next_step_offset(freq)
@@ -94,6 +113,7 @@ def build_common_fc_index(a_ts: pd.Series, b_ts: pd.Series, bundle_ts: pd.Series
                          _last_index_or_min(a_ts),
                          _last_index_or_min(b_ts)])
     return pd.date_range(start=latest_actual + step, periods=horizon, freq=freq)
+
 
 def fit_and_forecast_to_index(series: pd.Series, idx: pd.DatetimeIndex) -> pd.Series:
     if series is None or series.empty:
@@ -105,22 +125,30 @@ def fit_and_forecast_to_index(series: pd.Series, idx: pd.DatetimeIndex) -> pd.Se
     fc.index = idx
     return fc
 
+
 def safe_price(product_df: pd.DataFrame, product_id: str) -> float:
-    row = product_df.loc[product_df['product_id'].astype(str) == str(product_id)]
+    row = product_df.loc[product_df['product_id'].astype(
+        str) == str(product_id)]
     return float(row['Price'].iloc[0]) if not row.empty else 0.0
 
+
 def safe_name(product_df: pd.DataFrame, product_id: str) -> str:
-    row = product_df.loc[product_df['product_id'].astype(str) == str(product_id)]
+    row = product_df.loc[product_df['product_id'].astype(
+        str) == str(product_id)]
     return str(row['product_name'].iloc[0]) if not row.empty else f"(id:{product_id})"
+
 
 def pick_ped_row(ped_df: pd.DataFrame, id_a: str, id_b: str) -> pd.Series | None:
     a, b = str(id_a), str(id_b)
-    m1 = (ped_df['product_id_1'].astype(str) == a) & (ped_df['product_id_2'].astype(str) == b)
-    m2 = (ped_df['product_id_1'].astype(str) == b) & (ped_df['product_id_2'].astype(str) == a)
+    m1 = (ped_df['product_id_1'].astype(str) == a) & (
+        ped_df['product_id_2'].astype(str) == b)
+    m2 = (ped_df['product_id_1'].astype(str) == b) & (
+        ped_df['product_id_2'].astype(str) == a)
     matches = ped_df[m1 | m2].copy()
     if matches.empty:
         return None
-    non_strict = matches[matches['mode'].astype(str).str.lower() == 'non_strict']
+    non_strict = matches[matches['mode'].astype(
+        str).str.lower() == 'non_strict']
     if not non_strict.empty:
         return non_strict.iloc[0]
     return matches.iloc[0]
@@ -128,6 +156,8 @@ def pick_ped_row(ped_df: pd.DataFrame, id_a: str, id_b: str) -> pd.Series | None
 # =========================
 # Core per-bundle computation (PED from file)
 # =========================
+
+
 def compute_bundle_summary_aligned(product_df: pd.DataFrame,
                                    fact_df: pd.DataFrame,
                                    ped_df: pd.DataFrame,
@@ -152,20 +182,22 @@ def compute_bundle_summary_aligned(product_df: pd.DataFrame,
     if ped_row is None:
         epsilon = 0.0
     else:
-        epsilon = float(ped_row['elasticity_epsilon']) if pd.notna(ped_row['elasticity_epsilon']) else 0.0
+        epsilon = float(ped_row['elasticity_epsilon']) if pd.notna(
+            ped_row['elasticity_epsilon']) else 0.0
 
     # Common forecast index
-    COMMON_FC_INDEX = build_common_fc_index(a_ts, b_ts, bundle_ts, freq, horizon)
+    COMMON_FC_INDEX = build_common_fc_index(
+        a_ts, b_ts, bundle_ts, freq, horizon)
 
     # Forecast RAW (may be negative)
     bundle_fc_raw = fit_and_forecast_to_index(bundle_ts, COMMON_FC_INDEX)
-    a_fc_all_raw  = fit_and_forecast_to_index(a_ts, COMMON_FC_INDEX)
-    b_fc_all_raw  = fit_and_forecast_to_index(b_ts, COMMON_FC_INDEX)
+    a_fc_all_raw = fit_and_forecast_to_index(a_ts, COMMON_FC_INDEX)
+    b_fc_all_raw = fit_and_forecast_to_index(b_ts, COMMON_FC_INDEX)
 
     # Clamp non-negative
     bundle_fc = bundle_fc_raw.clip(lower=0)
-    a_fc_all  = a_fc_all_raw.clip(lower=0)
-    b_fc_all  = b_fc_all_raw.clip(lower=0)
+    a_fc_all = a_fc_all_raw.clip(lower=0)
+    b_fc_all = b_fc_all_raw.clip(lower=0)
 
     # Prices
     price_a = safe_price(product_df, id_a)
@@ -237,6 +269,8 @@ def compute_bundle_summary_aligned(product_df: pd.DataFrame,
 # =========================
 # Main
 # =========================
+
+
 def main():
     # Load data
     try:
@@ -249,18 +283,24 @@ def main():
         sys.exit(1)
 
     # Column sanity
-    require_columns(rules_df,   ['antecedents_names', 'consequents_names'], 'RULES file')
-    require_columns(fact_df,    ['Product ID', 'Receipt No', 'Line Total', 'Date'], 'FACT file')
-    require_columns(product_df, ['product_id', 'product_name', 'Price'], 'PRODUCT file')
-    require_columns(ped_df,     ['product_id_1','product_id_2',
-                                 'elasticity_epsilon','intercept_logk','mode','n_price_points'],
+    require_columns(rules_df,   ['antecedents_names',
+                    'consequents_names', 'category'], 'RULES file')
+    require_columns(
+        fact_df,    ['Product ID', 'Receipt No', 'Line Total', 'Date'], 'FACT file')
+    require_columns(product_df, ['product_id',
+                    'product_name', 'Price'], 'PRODUCT file')
+    require_columns(ped_df,     ['product_id_1', 'product_id_2',
+                                 'elasticity_epsilon', 'intercept_logk', 'mode', 'n_price_points'],
                     'PED SUMMARY file')
 
     # Header
-    forced   = FORCE_NEW_PRICE is not None
+    forced = FORCE_NEW_PRICE is not None
     disc_str = f"forced price={FORCE_NEW_PRICE:.2f}" if forced else f"{DISCOUNT_PCT*100:.1f}%"
-    print(f"=== Bundle Forecast Summary (TOP {TOP_N} MBA rules; product_id bundles) ===")
-    print(f"Discount: {disc_str} | Freq: {AGG_FREQ} | Horizon: {HORIZON} | Seasonal periods: {SEASONAL_PERIODS}")
+    print(f"=== Bundle Forecast Summary - SARIMA (TOP {TOP_N} MBA rules) ===")
+    print(
+        f"Discount: {disc_str} | Freq: {AGG_FREQ} | Horizon: {HORIZON} | Seasonal periods: {SEASONAL_PERIODS}")
+    print(
+        f"SARIMA order: {SARIMA_ORDER} | Seasonal order: {SARIMA_SEASONAL_ORDER}")
 
     rows = []
     n = min(TOP_N, len(rules_df))
@@ -272,9 +312,12 @@ def main():
         try:
             row = compute_bundle_summary_aligned(product_df, fact_df, ped_df,
                                                  id_a, id_b, AGG_FREQ, HORIZON)
+            # Add category to row
+            row['category'] = rule['category']
             rows.append(row)
         except Exception as e:
-            print(f"[WARN] Skipping rule row {i} ({id_a}, {id_b}) due to error: {e}")
+            print(
+                f"[WARN] Skipping rule row {i} ({id_a}, {id_b}) due to error: {e}")
 
     if not rows:
         print("No bundles resolved; nothing to summarize.")
@@ -282,27 +325,40 @@ def main():
 
     # Exact column order (updated label)
     out_cols = [
-        'product_id_1','product_id_2','product name 1','product name 2',
-        'Price','Discounted_Price','Revenue_Before','Revenue_After',
-        'Revenue_Impact','BreakEven/ SurplusUnits','Series_Length','Forecast_Horizon'
+        'category', 'product_id_1', 'product_id_2', 'product name 1', 'product name 2',
+        'Price', 'Discounted_Price', 'Revenue_Before', 'Revenue_After',
+        'Revenue_Impact', 'BreakEven/ SurplusUnits', 'Series_Length', 'Forecast_Horizon'
     ]
     out_df = pd.DataFrame(rows)[out_cols]
 
-    # Console table with capped names (updated label)
+    # Split by category and save separate CSVs
+    Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
+
+    categories = out_df['category'].unique()
+    for category in categories:
+        category_df = out_df[out_df['category'] == category].copy()
+
+        # Remove category column from output (already in filename)
+        category_df = category_df.drop(columns=['category'])
+
+        # Output path
+        output_csv = f"{OUTPUT_DIR}/bundle_sarima_summary_{category.lower()}.csv"
+        category_df.to_csv(output_csv, index=False, encoding='utf-8')
+        print(f"  {category}: {len(category_df)} bundles → {output_csv}")
+
+    # Console table with capped names (show all together)
     print_cols = [
-        'product name 1','product name 2','Price','Discounted_Price',
-        'Revenue_Before','Revenue_After','Revenue_Impact','BreakEven/ SurplusUnits'
+        'category', 'product name 1', 'product name 2', 'Price', 'Discounted_Price',
+        'Revenue_Before', 'Revenue_After', 'Revenue_Impact', 'BreakEven/ SurplusUnits'
     ]
     printable = out_df.copy()
-    printable['product name 1'] = printable['product name 1'].map(lambda s: cap(s, 50))
-    printable['product name 2'] = printable['product name 2'].map(lambda s: cap(s, 50))
+    printable['product name 1'] = printable['product name 1'].map(
+        lambda s: cap(s, 50))
+    printable['product name 2'] = printable['product name 2'].map(
+        lambda s: cap(s, 50))
     print("\n--- Summary (names capped to 50 chars) ---")
     print(printable[print_cols].to_string(index=False))
 
-    # Export CSV
-    Path(OUTPUT_CSV).parent.mkdir(parents=True, exist_ok=True)
-    out_df.to_csv(OUTPUT_CSV, index=False, encoding='utf-8')
-    print(f"\nCSV saved to: {OUTPUT_CSV}")
 
 if __name__ == "__main__":
     main()
