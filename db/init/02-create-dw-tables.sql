@@ -34,8 +34,8 @@ CREATE TABLE IF NOT EXISTS time_dimension (
 
 -- Market Basket Analysis Tables
 CREATE TABLE transaction_records (
-    "Receipt No" INT PRIMARY KEY NOT NULL,
-    "SKU" TEXT
+    Receipt No INT PRIMARY KEY NOT NULL,
+    SKU TEXT
 );
 
 --Fact Tables   
@@ -60,5 +60,4 @@ CREATE TABLE IF NOT EXISTS fact_transaction_dimension (
     take_out BOOLEAN,
     PRIMARY KEY (receipt_no, date),
     FOREIGN KEY (product_id) REFERENCES current_product_dimension(product_id),
-    FOREIGN KEY (time_id) REFERENCES time_dimension(time_id)
 );
