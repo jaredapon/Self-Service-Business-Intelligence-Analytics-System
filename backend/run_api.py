@@ -19,7 +19,7 @@ if __name__ == "__main__":
         "app.main:app",
         host=settings.api_host,  # The host address to bind to, from config.
         port=settings.api_port,  # The port to listen on, from config.
-        reload=True              # reload=True enables auto-reloading for development.
+        reload=False              # reload=True enables auto-reloading for development.
                                  # The server will restart automatically on code changes.
                                  # This should be set to False in production.
     )

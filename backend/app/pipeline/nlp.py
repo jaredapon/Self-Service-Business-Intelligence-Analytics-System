@@ -3,27 +3,81 @@ Non-Linear Programming (NLP) for Bundle Price Optimization
 Uses elasticity of demand from PED analysis to optimize bundle pricing
 while respecting COGS constraints and minimum discount requirements.
 """
-
 import sys
 import math
-from pathlib import Path
 import pandas as pd
 import numpy as np
 from scipy.optimize import minimize
+from io import BytesIO
+from minio import MinIO
+from minio.error import S3Error
+from app.core.config import settings
 
 # =========================
 # USER CONFIGURATION
 # =========================
-MBA_FOLDER = 'mba_output'
-PED_SUMMARY_PATH = MBA_FOLDER + '/ped_output/ped_summary.csv'
-PRODUCT_PATH = 'etl_dimensions/current_product_dimension.csv'
-OUT_DIR = MBA_FOLDER + '/nlp_output'
-
 # Default COGS multiplier (60% of current price) when COGS column is missing
 DEFAULT_COGS_MULTIPLIER = 0.60
 
 # Minimum discount percentage (e.g., 0.1 means 10% discount minimum)
 MIN_DISCOUNT_PCT = 0.10
+
+# --- New: MinIO Client Initialization ---
+try:
+    minio_client = Minio(
+        settings.minio_endpoint,
+        access_key=settings.minio_access,
+        secret_key=settings.minio_secret,
+        secure=settings.minio_secure,
+    )
+    print("✅ Successfully connected to MinIO.")
+except Exception as e:
+    print(f"❌ Failed to connect to MinIO: {e}")
+    minio_client = None
+
+# =========================
+# NEW HELPERS: MINIO I/O
+# =========================
+
+def get_csv_from_minio(bucket, object_name):
+    """Downloads a CSV file from MinIO and returns it as a pandas DataFrame."""
+    if not minio_client:
+        print(f"MinIO client not available. Cannot download {object_name}.")
+        return pd.DataFrame()
+
+    try:
+        print(f"  Downloading: {bucket}/{object_name}")
+        response = minio_client.get_object(bucket, object_name)
+        file_content = BytesIO(response.read())
+        df = pd.read_csv(file_content)
+        response.close()
+        response.release_conn()
+        return df
+    except S3Error as e:
+        print(f"Error getting file from MinIO at {bucket}/{object_name}: {e}")
+        return pd.DataFrame()
+
+def upload_df_to_minio(df, bucket, object_name):
+    """Uploads a pandas DataFrame as a CSV to MinIO."""
+    if not minio_client:
+        print("MinIO client not available. Skipping upload.")
+        return
+
+    csv_bytes = df.to_csv(index=False).encode('utf-8')
+    csv_buffer = BytesIO(csv_bytes)
+
+    try:
+        minio_client.put_object(
+            bucket,
+            object_name,
+            data=csv_buffer,
+            length=len(csv_bytes),
+            content_type='application/csv'
+        )
+        print(f"  Successfully uploaded to: {bucket}/{object_name}")
+    except S3Error as e:
+        print(f"Error uploading {object_name} to MinIO: {e}")
+
 
 # =========================
 # Helpers
@@ -180,24 +234,24 @@ def optimize_bundle_price(bundle_data: dict) -> dict:
 def main():
     print("=== Non-Linear Programming for Bundle Price Optimization ===")
 
-    # Load data
-    try:
-        ped_df = pd.read_csv(PED_SUMMARY_PATH)
-        product_df = pd.read_csv(PRODUCT_PATH)
-    except FileNotFoundError as e:
-        print(f"Error: {e}")
-        print(f"Make sure to run mba.py and ped.py first to generate the required files.")
+    # Load data from MinIO
+    print("Loading data from MinIO staging bucket...")
+    ped_df = get_csv_from_minio(settings.minio_staging_bucket, 'ped_summary.csv')
+    product_df = get_csv_from_minio(settings.minio_staging_bucket, 'current_product_dimension.csv')
+
+    if ped_df.empty or product_df.empty:
+        print("Error: Could not load required files from MinIO. Exiting.")
         sys.exit(1)
 
     # Sanity checks
     require_columns(ped_df, ['product_name_1', 'product_name_2', 'elasticity_epsilon',
-                    'intercept_logk', 'r2_logspace', 'n_price_points'], 'PED Summary')
+                    'intercept_logk', 'r2_logspace', 'n_price_points'], 'ped_summary.csv')
     require_columns(product_df, ['product_id',
-                    'product_name', 'Price'], 'Product Dimension')
+                    'product_name', 'Price'], 'current_product_dimension.csv')
 
     # Create output directory
-    out_dir = Path(OUT_DIR)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # out_dir = Path(OUT_DIR) # This line is removed as OUT_DIR is no longer used
+    # out_dir.mkdir(parents=True, exist_ok=True) # This line is removed as OUT_DIR is no longer used
 
     # Check if cost column exists
     has_cost_column = 'product_cost' in product_df.columns or 'COGS' in product_df.columns
@@ -313,22 +367,28 @@ def main():
             f"  Expected Demand: {opt_result['quantity_demanded']:.4f} | Profit: {opt_result['profit']:.2f}")
         print()
 
-    # Save results
+    # Save results to MinIO
     if results:
         results_df = pd.DataFrame(results)
-        out_csv = out_dir / 'nlp_optimization_results.csv'
-        results_df.to_csv(out_csv, index=False, encoding='utf-8')
-        print(f"\nOptimization results saved: {out_csv}")
+        print("\nUploading optimization results to MinIO staging bucket...")
+        upload_df_to_minio(
+            results_df,
+            settings.minio_staging_bucket,
+            'nlp_optimization_results.csv'
+        )
         print(f"  Total bundles optimized: {len(results)}")
     else:
         print("\nNo bundles were successfully optimized.")
 
-    # Save skipped bundles
+    # Save skipped bundles to MinIO
     if skipped:
         skipped_df = pd.DataFrame(skipped)
-        skipped_csv = out_dir / 'nlp_skipped_bundles.csv'
-        skipped_df.to_csv(skipped_csv, index=False, encoding='utf-8')
-        print(f"\nSkipped bundles saved: {skipped_csv}")
+        print("\nUploading skipped bundles log to MinIO staging bucket...")
+        upload_df_to_minio(
+            skipped_df,
+            settings.minio_staging_bucket,
+            'nlp_skipped_bundles.csv'
+        )
         print(f"  Total bundles skipped: {len(skipped)}")
 
     print("\n=== NLP Optimization Complete ===")

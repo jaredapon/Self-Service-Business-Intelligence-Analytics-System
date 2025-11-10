@@ -3,21 +3,87 @@
 
 import pandas as pd
 from mlxtend.frequent_patterns import fpgrowth, association_rules
-import os
 import time
+from io import BytesIO
 
-pd.set_option('display.max_rows', None)
-pd.set_option('display.max_columns', None)
-pd.set_option('display.width', 500)
-pd.set_option('display.max_colwidth', 500)
+# --- New Imports for MinIO ---
+from minio import MinIO
+from minio.error import S3Error
+from app.core.config import settings
+
+# --- New: MinIO Client Initialization ---
+try:
+    minio_client = Minio(
+        settings.minio_endpoint,
+        access_key=settings.minio_access,
+        secret_key=settings.minio_secret,
+        secure=settings.minio_secure,
+    )
+    print("✅ Successfully connected to MinIO.")
+except Exception as e:
+    print(f"❌ Failed to connect to MinIO: {e}")
+    minio_client = None
+
+# =========================
+# NEW HELPERS: MINIO I/O
+# =========================
+
+def get_csv_from_minio(bucket, object_name):
+    """Downloads a CSV file from MinIO and returns it as a pandas DataFrame."""
+    if not minio_client:
+        print(f"MinIO client not available. Cannot download {object_name}.")
+        return pd.DataFrame()  # Return empty DataFrame on failure
+    
+    try:
+        print(f"  Downloading: {bucket}/{object_name}")
+        response = minio_client.get_object(bucket, object_name)
+        file_content = BytesIO(response.read())
+        df = pd.read_csv(file_content)
+        response.close()
+        response.release_conn()
+        return df
+    except S3Error as e:
+        print(f"Error getting file from MinIO at {bucket}/{object_name}: {e}")
+        return pd.DataFrame()
+
+def upload_df_to_minio(df, bucket, object_name):
+    """Uploads a pandas DataFrame as a CSV to MinIO."""
+    if not minio_client:
+        print("MinIO client not available. Skipping upload.")
+        return
+
+    csv_bytes = df.to_csv(index=False).encode('utf-8')
+    csv_buffer = BytesIO(csv_bytes)
+    
+    try:
+        minio_client.put_object(
+            bucket,
+            object_name,
+            data=csv_buffer,
+            length=len(csv_bytes),
+            content_type='application/csv'
+        )
+        print(f"  Successfully uploaded to: {bucket}/{object_name}")
+    except S3Error as e:
+        print(f"Error uploading {object_name} to MinIO: {e}")
+
 
 start_time = time.time()
-print("Loading transaction data...")
-df = pd.read_csv('etl_dimensions/transaction_records.csv')
+print("Loading transaction data from MinIO staging bucket...")
+df = get_csv_from_minio(
+    settings.minio_staging_bucket,
+    'transaction_records.csv'
+)
 
 # Load product dimension
-print("Loading product dimension...")
-prod_dim = pd.read_csv('etl_dimensions/current_product_dimension.csv', dtype={'product_id': str})
+print("Loading product dimension from MinIO staging bucket...")
+prod_dim = get_csv_from_minio(
+    settings.minio_staging_bucket,
+    'current_product_dimension.csv'
+)
+# Ensure product_id is string type after loading
+if 'product_id' in prod_dim.columns:
+    prod_dim['product_id'] = prod_dim['product_id'].astype(str)
 
 # Create lookup dictionaries (OPTIMIZED: done once)
 id_to_name = dict(zip(prod_dim['product_id'], prod_dim['product_name']))
@@ -75,9 +141,9 @@ def remove_reversed_rule_duplicates(df):
             keep_rows.append(row)
     return pd.DataFrame(keep_rows)
 
-def run_mba_for_category(category_name, output_folder, all_rules):
+def run_mba_for_category(category_name, all_rules):
     print(f"\n--- Running MBA for category: {category_name} ---")
-    os.makedirs(output_folder, exist_ok=True)
+    # No longer need to create local directories
 
     # Filter product dimension for the target category
     cat_rows = prod_dim[prod_dim['CATEGORY'] == category_name]
@@ -159,9 +225,9 @@ def run_mba_for_category(category_name, output_folder, all_rules):
 
     return all_rules
 
-def run_mba_for_meal(output_folder, all_rules):
+def run_mba_for_meal(all_rules):
     print(f"\n--- Running MBA for MEAL (FOOD <-> DRINK) ---")
-    os.makedirs(output_folder, exist_ok=True)
+    # No longer need to create local directories
 
     # Only keep transactions that have at least one FOOD and one DRINK item
     def has_food_and_drink(pid_string):
@@ -237,21 +303,23 @@ def run_mba_for_meal(output_folder, all_rules):
     return all_rules
 
 # Main execution
-if 'prod_dim' in locals():
-    output_folder = 'mba_output'
-    os.makedirs(output_folder, exist_ok=True)
+if 'prod_dim' in locals() and not prod_dim.empty and not df.empty:
     all_rules = pd.DataFrame()
     
-    all_rules = run_mba_for_category('FOOD', output_folder, all_rules)
-    all_rules = run_mba_for_category('DRINK', output_folder, all_rules)
-    all_rules = run_mba_for_meal(output_folder, all_rules)
+    all_rules = run_mba_for_category('FOOD', all_rules)
+    all_rules = run_mba_for_category('DRINK', all_rules)
+    all_rules = run_mba_for_meal(all_rules)
 
-    association_rules_csv_path = os.path.join(output_folder, 'association_rules.csv')
-    all_rules.to_csv(association_rules_csv_path, index=False)
+    print("\nUploading final association rules to MinIO staging bucket...")
+    upload_df_to_minio(
+        all_rules,
+        settings.minio_staging_bucket,
+        'association_rules.csv'
+    )
 
-    print(f"\nResults exported successfully to {output_folder}")
+    print(f"\nResults exported successfully to MinIO.")
 else:
-    print("Product dimension not loaded; cannot run category-specific MBA.")
+    print("Product dimension or transaction data not loaded correctly from MinIO; cannot run MBA.")
 
 end_time = time.time()
 print(f"\nTotal execution time: {end_time - start_time:.2f} seconds")

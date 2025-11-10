@@ -25,7 +25,7 @@ class Settings:
     api_port: int = int(os.getenv("API_PORT", "8000"))
 
     # Frontend / CORS
-    _cors_origins_raw = os.getenv("DASH_ALLOW_ORIGINS", "http://localhost:5173")
+    _cors_origins_raw = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:5173")
     cors_origins: List[str] = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
 
     # Database (components)
@@ -52,8 +52,11 @@ class Settings:
     minio_access: str = os.getenv("MINIO_ROOT_USER", "booklatte")
     minio_secret: str = os.getenv("MINIO_ROOT_PASSWORD", "password")
     minio_secure: bool = _str_to_bool(os.getenv("MINIO_SECURE", "false"))
-    minio_bucket: str = os.getenv("MINIO_UPLOAD_BUCKET", "uploads")
-
+    minio_landing_bucket: str = os.getenv("MINIO_LANDING_BUCKET", "landing")
+    minio_raw_sales_folder: str = os.getenv("MINIO_RAW_SALES_FOLDER", "raw_sales")
+    minio_raw_sales_by_product_folder: str = os.getenv("MINIO_RAW_SALES_BY_PRODUCT_FOLDER", "raw_sales_by_product")
+    minio_staging_bucket: str = os.getenv("MINIO_STAGING_BUCKET", "staging")
+    
     # Pipeline Trigger
     trigger_dir: str = os.getenv("TRIGGER_DIR", "/app/trigger")
 

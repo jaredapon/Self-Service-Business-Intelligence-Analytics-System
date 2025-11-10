@@ -40,7 +40,7 @@ class PipelineEventHandler(FileSystemEventHandler):
             time.sleep(0.5) 
             
             try:
-                # --- Runs ETL -> MBA -> PED -> Holt-Winters ---
+                # --- Runs ETL -> MBA -> PED -> NLP -> Holt-Winters ---
                 self.logger.info("Starting pipeline execution...")
                 run_all.execute_pipeline()
                 self.logger.info("--- Pipeline execution finished. ---")

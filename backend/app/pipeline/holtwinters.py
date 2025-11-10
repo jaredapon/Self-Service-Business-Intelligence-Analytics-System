@@ -1,21 +1,15 @@
-import os
 import sys
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from io import BytesIO
+from minio import MinIO
+from minio.error import S3Error
+from app.core.config import settings
 
 # =========================
 # USER CONFIGURATION
 # =========================
-PARENT_DIR        = 'mba_output'
-RULES_PATH        = PARENT_DIR + '/association_rules.csv'
-FACT_PATH         = 'etl_dimensions/fact_transaction_dimension.csv'
-PRODUCT_PATH      = 'etl_dimensions/current_product_dimension.csv'
-PED_SUMMARY_PATH  = PARENT_DIR + '/ped_output/ped_summary.csv'
-NLP_OPT_PATH      = PARENT_DIR + '/nlp_output/nlp_optimization_results.csv'
-OUTPUT_DIR        = 'holtwinters_results'
-
 # Time-series settings
 AGG_FREQ = 'QE'            # Quarterly frequency
 SEASONAL_PERIODS = 4       # 4 quarters per year
@@ -29,6 +23,62 @@ HW_GAMMA = 0.2
 
 # Price scenario (fallback)
 DISCOUNT_RATE = 0.05
+
+# --- New: MinIO Client Initialization ---
+try:
+    minio_client = MinIO(
+        settings.minio_endpoint,
+        access_key=settings.minio_access,
+        secret_key=settings.minio_secret,
+        secure=settings.minio_secure,
+    )
+    print("✅ Successfully connected to MinIO.")
+except Exception as e:
+    print(f"❌ Failed to connect to MinIO: {e}")
+    minio_client = None
+
+# =========================
+# NEW HELPERS: MINIO I/O
+# =========================
+
+def get_csv_from_minio(bucket, object_name):
+    """Downloads a CSV file from MinIO and returns it as a pandas DataFrame."""
+    if not minio_client:
+        print(f"MinIO client not available. Cannot download {object_name}.")
+        return pd.DataFrame()
+
+    try:
+        print(f"  Downloading: {bucket}/{object_name}")
+        response = minio_client.get_object(bucket, object_name)
+        file_content = BytesIO(response.read())
+        df = pd.read_csv(file_content)
+        response.close()
+        response.release_conn()
+        return df
+    except S3Error as e:
+        print(f"Error getting file from MinIO at {bucket}/{object_name}: {e}")
+        return pd.DataFrame()
+
+def upload_df_to_minio(df, bucket, object_name):
+    """Uploads a pandas DataFrame as a CSV to MinIO."""
+    if not minio_client:
+        print("MinIO client not available. Skipping upload.")
+        return
+
+    csv_bytes = df.to_csv(index=True).encode('utf-8') # Keep index for time-series
+    csv_buffer = BytesIO(csv_bytes)
+
+    try:
+        minio_client.put_object(
+            bucket,
+            object_name,
+            data=csv_buffer,
+            length=len(csv_bytes),
+            content_type='application/csv'
+        )
+        print(f"  Successfully uploaded to: {bucket}/{object_name}")
+    except S3Error as e:
+        print(f"Error uploading {object_name} to MinIO: {e}")
 
 # =========================
 # HELPER FUNCTIONS
@@ -82,17 +132,17 @@ def build_ts_all(lines: pd.DataFrame, AGG_FREQ: str) -> pd.Series:
 # =========================
 # LOAD DATA
 # =========================
-try:
-    rules_df   = pd.read_csv(RULES_PATH)
-    fact_df    = pd.read_csv(FACT_PATH)
-    product_df = pd.read_csv(PRODUCT_PATH)
-    ped_df     = pd.read_csv(PED_SUMMARY_PATH)
-    nlp_opt_df = pd.read_csv(NLP_OPT_PATH)
-except FileNotFoundError as e:
-    print(f"Error loading required data: {e}")
+print("Loading data from MinIO staging bucket...")
+rules_df   = get_csv_from_minio(settings.minio_staging_bucket, 'association_rules.csv')
+fact_df    = get_csv_from_minio(settings.minio_staging_bucket, 'fact_transaction_dimension.csv')
+product_df = get_csv_from_minio(settings.minio_staging_bucket, 'current_product_dimension.csv')
+ped_df     = get_csv_from_minio(settings.minio_staging_bucket, 'ped_summary.csv')
+nlp_opt_df = get_csv_from_minio(settings.minio_staging_bucket, 'nlp_optimization_results.csv')
+
+if any(df.empty for df in [rules_df, fact_df, product_df, ped_df, nlp_opt_df]):
+    print("Error: Could not load one or more required files from MinIO. Exiting.")
     sys.exit(1)
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 all_results = []
 
 nlp_opt_indexed = nlp_opt_df.set_index('bundle_id')
@@ -257,8 +307,13 @@ if all_results:
         'revenue_impact_abs', 'revenue_impact_pct'
     ]
     combined_df = combined_df.drop(columns=[c for c in drop_cols if c in combined_df.columns], errors='ignore')
-    OUTPUT_CSV = os.path.join(OUTPUT_DIR, 'holtwinters_results_all.csv')
-    combined_df.to_csv(OUTPUT_CSV, index=True)
-    print(f"\n All bundle forecasts saved to {OUTPUT_CSV}")
+
+    print("\nUploading Holt-Winters results to MinIO staging bucket...")
+    upload_df_to_minio(
+        combined_df,
+        settings.minio_staging_bucket,
+        'holtwinters_results_all.csv'
+    )
+    print("\nAll bundle forecasts saved successfully to MinIO.")
 else:
-    print("\n No successful forecasts generated.")
+    print("\nNo successful forecasts generated.")

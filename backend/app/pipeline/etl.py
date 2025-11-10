@@ -5,17 +5,80 @@ import numpy as np
 import re
 import time
 from functools import lru_cache
+from io import BytesIO
 
-pd.set_option('display.max_rows', None)
-pd.set_option('display.max_columns', None)
+# --- Imports for MinIO ---
+from minio import Minio
+from minio.error import S3Error
+from app.core.config import settings
+
+# --- MinIO Client Initialization ---
+try:
+    minio_client = Minio(
+        settings.minio_endpoint,
+        access_key=settings.minio_access,
+        secret_key=settings.minio_secret,
+        secure=settings.minio_secure,
+    )
+    print("✅ Successfully connected to MinIO.")
+except Exception as e:
+    print(f"❌ Failed to connect to MinIO: {e}")
+    minio_client = None
+
+# =========================
+# NEW HELPERS: MINIO I/O
+# =========================
+
+def get_excel_files_from_minio(bucket, prefix):
+    """Downloads all .xlsx files from a MinIO prefix and returns them as a list of (name, BytesIO) tuples."""
+    if not minio_client:
+        print("MinIO client not available. Skipping download.")
+        return []
+    
+    files = []
+    try:
+        objects = minio_client.list_objects(bucket, prefix=prefix, recursive=True)
+        for obj in objects:
+            if obj.object_name.lower().endswith('.xlsx'):
+                print(f"  Downloading: {obj.object_name}")
+                response = minio_client.get_object(bucket, obj.object_name)
+                file_content = BytesIO(response.read())
+                files.append((obj.object_name, file_content))
+                response.close()
+                response.release_conn()
+    except S3Error as e:
+        print(f"Error listing/getting files from MinIO at {bucket}/{prefix}: {e}")
+    return files
+
+def upload_df_to_minio(df, bucket, object_name):
+    """Uploads a pandas DataFrame as a CSV to MinIO."""
+    if not minio_client:
+        print("MinIO client not available. Skipping upload.")
+        return
+
+    csv_bytes = df.to_csv(index=False).encode('utf-8')
+    csv_buffer = BytesIO(csv_bytes)
+    
+    try:
+        minio_client.put_object(
+            bucket,
+            object_name,
+            data=csv_buffer,
+            length=len(csv_bytes),
+            content_type='application/csv'
+        )
+        print(f"  Successfully uploaded to: {bucket}/{object_name}")
+    except S3Error as e:
+        print(f"Error uploading {object_name} to MinIO: {e}")
 
 # =========================
 # HELPERS: INPUT PARSING
 # =========================
 
-def process_sales_file(file_path):
-    """Process individual sales file to handle varying structures (original logic)."""
-    df = pd.read_excel(file_path)
+def process_sales_file(file_content_tuple):
+    """Process individual sales file from in-memory bytes."""
+    _file_name, file_content = file_content_tuple
+    df = pd.read_excel(file_content)
 
     # Find the row that contains the actual column headers
     header_row = None
@@ -38,9 +101,10 @@ def process_sales_file(file_path):
     return df
 
 
-def process_product_file(file_path):
-    """Process individual product file to handle varying structures (original logic)."""
-    df = pd.read_excel(file_path)
+def process_product_file(file_content_tuple):
+    """Process individual product file from in-memory bytes."""
+    _file_name, file_content = file_content_tuple
+    df = pd.read_excel(file_content)
 
     # Find the row that contains the actual column headers
     header_row = None
@@ -92,8 +156,24 @@ def create_time_dimension(_date_series):
     return pd.DataFrame(hour_rows + minute_rows)
 
 # =========================
-# COSTING (SAFE-CACHED, SAME LOGIC)
+# COSTING (MODIFIED FOR LOCAL FILE)
 # =========================
+
+@lru_cache(maxsize=1)
+def get_costing_excel_file_local():
+    """
+    Fetches the costing .xlsx file from the local filesystem and caches the result.
+    Assumes the file is in the container's /app directory.
+    """
+    # The script runs from /app, and the costing file is at /app/Booklatte...
+    costing_files = glob.glob('Booklatte*.xlsx')
+    if not costing_files:
+        print("❌ CRITICAL: No local costing file found matching 'Booklatte*.xlsx'.")
+        return None
+    
+    print(f"  Using local costing file: {costing_files[0]}")
+    return pd.ExcelFile(costing_files[0])
+
 
 @lru_cache(maxsize=None)
 def normalize_drink_name(name: str) -> str:
@@ -107,15 +187,13 @@ def normalize_drink_name(name: str) -> str:
 @lru_cache(maxsize=None)
 def get_drink_cost(product_name: str) -> float | None:
     """
-    Get cost from costing file sheets.
-    Logic matches your original implementation; we only cache per product_name.
+    Get cost from costing file sheets, loaded once from the local filesystem.
     """
-    try:
-        costing_files = glob.glob('raw_costing/*.xlsx')
-        if not costing_files:
-            return None
+    xl = get_costing_excel_file_local()
+    if xl is None:
+        return None
 
-        xl = pd.ExcelFile(costing_files[0])
+    try:
         product_norm = normalize_drink_name(product_name)
 
         best_match = None
@@ -148,14 +226,14 @@ def get_drink_cost(product_name: str) -> float | None:
                 best_match = sheet
 
         if best_match and best_score >= 2:
-            df = pd.read_excel(costing_files[0], sheet_name=best_match, header=None)
+            df = xl.parse(sheet_name=best_match, header=None)
             if len(df) > 35:
                 row_35 = df.iloc[35]
                 for col in range(1, len(row_35)):
                     if pd.notna(row_35[col]) and isinstance(row_35[col], (int, float)):
                         return round(float(row_35[col]), 2)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Warning: Could not process costing for '{product_name}': {e}")
 
     return None
 
@@ -308,17 +386,20 @@ def create_product_dimensions(combined_df: pd.DataFrame):
     return current_product_dim, history_product_dim
 
 # =========================
-# EXTRACT (ORIGINAL + SAFE)
+# EXTRACT (MODIFIED FOR MINIO)
 # =========================
 
 def extract():
     print("=== EXTRACT PHASE ===")
-    os.makedirs('cleaned_data', exist_ok=True)
+    # os.makedirs('cleaned_data', exist_ok=True) # No longer needed
 
     # Sales Transactions
-    print("Extracting Excel Sales Transactions List...")
-    sales_files = glob.glob('raw_sales/*.xlsx')
-    sales_dfs = [process_sales_file(f) for f in sales_files]
+    print(f"Extracting Sales Transactions from MinIO: {settings.minio_landing_bucket}/{settings.minio_raw_sales_folder}")
+    sales_files_content = get_excel_files_from_minio(
+        settings.minio_landing_bucket, settings.minio_raw_sales_folder
+    )
+    sales_files = [item[0] for item in sales_files_content]
+    sales_dfs = [process_sales_file(content_tuple) for content_tuple in sales_files_content]
 
     print("\nChecking for date range overlaps in sales files...")
     file_date_ranges = []
@@ -360,9 +441,12 @@ def extract():
         sales_df['Date'] = pd.to_datetime(sales_df['Date'], errors='coerce')
 
     # Sales by Product
-    print("Extracting Excel Sales Report by Product List...")
-    prod_files = glob.glob('raw_sales_by_product/*.xlsx')
-    prod_dfs = [process_product_file(f) for f in prod_files]
+    print(f"Extracting Sales Report by Product from MinIO: {settings.minio_landing_bucket}/{settings.minio_raw_sales_by_product_folder}")
+    prod_files_content = get_excel_files_from_minio(
+        settings.minio_landing_bucket, settings.minio_raw_sales_by_product_folder
+    )
+    prod_files = [item[0] for item in prod_files_content]
+    prod_dfs = [process_product_file(content_tuple) for content_tuple in prod_files_content]
 
     print("\nChecking for date range overlaps in sales by product files...")
     prod_ranges = []
@@ -414,7 +498,7 @@ def extract():
     return sales_df, sales_by_product_df
 
 # =========================
-# TRANSFORM (ORIGINAL LOGIC)
+# TRANSFORM (MODIFIED TO REMOVE INTERMEDIATE UPLOADS)
 # =========================
 
 def transform(sales_df, sales_by_product_df):
@@ -588,32 +672,35 @@ def transform(sales_df, sales_by_product_df):
         print("Warning: Receipt No column not found in one or both dataframes")
         combined_df = pd.DataFrame()
 
-    # Save cleaned intermediates (needed for your diffs)
-    sales_df.to_csv('cleaned_data/sales_transactions.csv', index=False)
-    sales_by_product_df.to_csv('cleaned_data/sales_by_product.csv', index=False)
+    # NOTE: Intermediate file uploads have been removed as requested.
+    # sales_df.to_csv('cleaned_data/sales_transactions.csv', index=False)
+    # sales_by_product_df.to_csv('cleaned_data/sales_by_product.csv', index=False)
 
     print("Transform phase completed successfully.")
     return combined_df
 
 # =========================
-# LOAD (ORIGINAL LOGIC)
+# LOAD (MODIFIED FOR MINIO - NO FOLDERS)
 # =========================
 
 def load(combined_df):
     print("=== LOAD PHASE ===")
-    os.makedirs('etl_dimensions', exist_ok=True)
 
     if combined_df.empty:
         print("Warning: Combined dataframe is empty, no output files created")
         print("Load phase completed.")
         return
 
+    print("Uploading dimension tables to MinIO staging bucket (root)...")
     # Time dimension
     if 'Date' in combined_df.columns:
-        print("Creating time_dimension.csv...")
+        print("Creating and uploading time_dimension.csv...")
         time_dim_df = create_time_dimension(combined_df['Date'])
-        time_dim_df.to_csv('etl_dimensions/time_dimension.csv', index=False)
-        print("etl_dimensions/time_dimension.csv created")
+        upload_df_to_minio(
+            time_dim_df, 
+            settings.minio_staging_bucket, 
+            'time_dimension.csv' # No folder
+        )
 
     # Map time_id
     def time_to_id(time_str):
@@ -661,11 +748,14 @@ def load(combined_df):
     else:
         fact_df = combined_df
 
-    fact_df.to_csv('etl_dimensions/fact_transaction_dimension.csv', index=False)
-    print("etl_dimensions/fact_transaction_dimension.csv created")
+    upload_df_to_minio(
+        fact_df,
+        settings.minio_staging_bucket,
+        'fact_transaction_dimension.csv' # No folder
+    )
 
     # Product dimensions
-    print("Creating SCD Type 4 Product Dimension tables (and parent_sku mapping)...")
+    print("Creating and uploading SCD Type 4 Product Dimension tables...")
     current_product_dim, history_product_dim = create_product_dimensions(combined_df)
 
     parent_map = {}
@@ -683,14 +773,23 @@ def load(combined_df):
             .apply(lambda x: ','.join(x.astype(str)))
             .reset_index(name='SKU')
         )
-        transaction_records.to_csv('etl_dimensions/transaction_records.csv', index=False)
-        print("etl_dimensions/transaction_records.csv created with columns: Receipt No, SKU")
+        upload_df_to_minio(
+            transaction_records,
+            settings.minio_staging_bucket,
+            'transaction_records.csv' # No folder
+        )
 
     if current_product_dim is not None and history_product_dim is not None:
-        current_product_dim.to_csv('etl_dimensions/current_product_dimension.csv', index=False)
-        print("etl_dimensions/current_product_dimension.csv created")
-        history_product_dim.to_csv('etl_dimensions/history_product_dimension.csv', index=False)
-        print("etl_dimensions/history_product_dimension.csv created")
+        upload_df_to_minio(
+            current_product_dim,
+            settings.minio_staging_bucket,
+            'current_product_dimension.csv' # No folder
+        )
+        upload_df_to_minio(
+            history_product_dim,
+            settings.minio_staging_bucket,
+            'history_product_dimension.csv' # No folder
+        )
         print(f"Current Product Dimension: {len(current_product_dim)} products")
         print(f"History Product Dimension: {len(history_product_dim)} product records")
 
