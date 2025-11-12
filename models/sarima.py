@@ -35,6 +35,10 @@ SARIMA_SEASONAL_ORDER = (1, 1, 1, SEASONAL_PERIODS)
 # Price scenario (fallback)
 DISCOUNT_RATE = 0.05
 
+# Evaluation mode - Show one sample from each category (food, drink, meal)
+SHOW_SAMPLE_MODE = False
+CATEGORIES_TO_SHOW = ['food', 'drink', 'meal']  # Show one from each
+
 # =========================
 # HELPER FUNCTIONS
 # =========================
@@ -89,6 +93,42 @@ def build_ts_all(lines: pd.DataFrame, AGG_FREQ: str) -> pd.Series:
     return rec.groupby(pd.Grouper(key='Date', freq=AGG_FREQ)).size()
 
 
+def evaluate_sarima(series: pd.Series, order, seasonal_order, label: str):
+    """Fit SARIMA in-sample and compute accuracy metrics."""
+    try:
+        if series is None or series.empty:
+            print(f"[{label}] Skipped — no data.")
+            return
+
+        model = SARIMAX(series, order=order, seasonal_order=seasonal_order,
+                        enforce_stationarity=False, enforce_invertibility=False)
+        fitted = model.fit(disp=False)
+
+        actual_vals = series.values
+        fitted_vals = fitted.fittedvalues.values
+
+        # Align lengths
+        if len(fitted_vals) < len(actual_vals):
+            fitted_vals = np.pad(
+                fitted_vals, (len(actual_vals) - len(fitted_vals), 0), mode='edge')
+
+        residuals = actual_vals - fitted_vals
+        mse = np.mean(residuals ** 2)
+        rmse = np.sqrt(mse)
+        mae = np.mean(np.abs(residuals))
+        wmape = np.sum(np.abs(residuals)) / np.sum(np.abs(actual_vals)
+                                                   ) * 100 if np.sum(actual_vals) != 0 else np.nan
+
+        print(f"\n{label}:")
+        print(f"MAE:  {mae:.3f}")
+        print(f"MSE:  {mse:.3f}")
+        print(f"RMSE: {rmse:.3f}")
+        print(f"MAPE: {wmape:.2f}%")
+
+    except Exception as e:
+        print(f"[{label}] Evaluation failed: {e}")
+
+
 # =========================
 # LOAD DATA
 # =========================
@@ -110,6 +150,9 @@ nlp_opt_indexed = nlp_opt_df.set_index('bundle_id')
 # Track first bundle per category for graphing
 graphed_categories = set()
 
+# Track categories processed in sample mode
+processed_sample_categories = set()
+
 # =========================
 # LOOP THROUGH ALL BUNDLE ROWS
 # =========================
@@ -120,10 +163,19 @@ for idx, rule_row in rules_df.iterrows():
         bundle_id = rule_row['bundle_id'] if 'bundle_id' in rule_row else ""
         category = rule_row['category'] if 'category' in rule_row else ""
 
+        # Skip if in sample mode and we already processed this category
+        if SHOW_SAMPLE_MODE and category.lower() in processed_sample_categories:
+            continue
+
+        # Skip if in sample mode and this category is not in our list
+        if SHOW_SAMPLE_MODE and category.lower() not in CATEGORIES_TO_SHOW:
+            continue
+
         print(f"\n==============================")
         print(
             f"Processing bundle row {idx}: {product_a_name} + {product_b_name}")
         print(f"Bundle ID: {bundle_id}")
+        print(f"Category: {category}")
         print(f"==============================")
 
         product_a_id, product_b_id = resolve_ids(
@@ -268,6 +320,17 @@ for idx, rule_row in rules_df.iterrows():
         all_results.append(df_all)
 
         # =========================
+        # MODEL EVALUATION
+        # =========================
+        print(f"\n  Model Evaluation Metrics:")
+        evaluate_sarima(a_ts_all, SARIMA_ORDER, SARIMA_SEASONAL_ORDER,
+                        f"{product_a_name} (Individual Item)")
+        evaluate_sarima(b_ts_all, SARIMA_ORDER, SARIMA_SEASONAL_ORDER,
+                        f"{product_b_name} (Individual Item)")
+        evaluate_sarima(bundle_sales_ts, SARIMA_ORDER, SARIMA_SEASONAL_ORDER,
+                        f"Bundle ({product_a_name} + {product_b_name})")
+
+        # =========================
         # GENERATE PLOT (only for first bundle of each category)
         # =========================
         if category not in graphed_categories:
@@ -344,6 +407,16 @@ for idx, rule_row in rules_df.iterrows():
                 f"Recommended Price: {new_price:.2f} | "
                 f"Impact: {impact_abs:.2f} ({impact_pct:.1f}%)"
             )
+
+        # In sample mode, track this category as processed
+        if SHOW_SAMPLE_MODE:
+            processed_sample_categories.add(category.lower())
+            # Stop if we've processed one bundle from each desired category
+            if all(cat in processed_sample_categories for cat in CATEGORIES_TO_SHOW):
+                print(
+                    f"\n[SAMPLE MODE: Processed one bundle from each category: {', '.join(CATEGORIES_TO_SHOW)}]")
+                print(f"[Set SHOW_SAMPLE_MODE=False to process all bundles.]")
+                break
 
     except Exception as e:
         print(f" Error in row {idx}: {e}")
