@@ -20,8 +20,8 @@ app = FastAPI(
 # This is crucial for a browser-based frontend.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,  # FIX: use the list from settings
-    allow_credentials=True,
+    allow_origins=["*"], #settings.cors_origins,  # FIX: use the list from settings
+    allow_credentials=False, #True,
     allow_methods=["*"],  # Allows all methods (GET, POST, etc.)
     allow_headers=["*"],  # Allows all headers
 )
