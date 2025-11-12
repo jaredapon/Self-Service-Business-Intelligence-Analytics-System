@@ -1,180 +1,243 @@
-"""
-Centralized I/O service for the data pipeline.
-
-Handles all interactions with the SQL database and MinIO object storage.
-"""
-from __future__ import annotations
-import uuid
-from io import BytesIO
+import os
+import io
+from typing import List, Dict, Any, Optional
 
 import pandas as pd
 from minio import Minio
-from minio.error import S3Error
-from sqlalchemy.engine import Engine
-from sqlalchemy import text
-
-from app.core.config import settings
-from app.db.session import engine  # global Engine
+import psycopg2
+from psycopg2.extras import execute_values
 
 
-# -------------------------
-# MinIO client
-# -------------------------
-try:
-    minio_client = Minio(
-        settings.minio_endpoint,
-        access_key=settings.minio_access,
-        secret_key=settings.minio_secret,
-        secure=settings.minio_secure,
-    )
-    print("✅ Successfully connected to MinIO.")
-except Exception as e:
-    print(f"❌ Failed to connect to MinIO: {e}")
-    minio_client = None
+# =========================
+# CONFIG
+# =========================
+
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
+
+MINIO_LANDING_BUCKET = os.getenv("MINIO_LANDING_BUCKET", "landing")
+RAW_SALES_PREFIX = os.getenv("MINIO_RAW_SALES_PREFIX", "raw_sales/")
+RAW_SALES_BY_PRODUCT_PREFIX = os.getenv(
+    "MINIO_RAW_SALES_BY_PRODUCT_PREFIX", "raw_sales_by_product/"
+)
+
+PG_HOST = os.getenv("PG_HOST", "localhost")
+PG_PORT = int(os.getenv("PG_PORT", "5432"))
+PG_DBNAME = os.getenv("PG_DBNAME", "postgres")
+PG_USER = os.getenv("PG_USER", "postgres")
+PG_PASSWORD = os.getenv("PG_PASSWORD", "postgres")
 
 
-# -------------------------
-# Helpers
-# -------------------------
-def _pg_ident(c: str) -> str:
-    """
-    Quote identifiers only when needed (spaces or mixed case).
-    """
-    needs_quotes = (' ' in c) or (c != c.lower())
-    return f'"{c}"' if needs_quotes else c
+# =========================
+# MINIO HELPERS
+# =========================
 
-
-def _execute_sql(sql_statement: str, engine_: Engine = engine):
-    """Execute raw SQL inside a transaction."""
-    with engine_.begin() as conn:
-        conn.execute(text(sql_statement))
-
-
-# -------------------------
-# DB I/O
-# -------------------------
-def write_df_to_sql(
-    df: pd.DataFrame,
-    table_name: str,
-    method: str = 'append',
-    pkey_cols: list[str] | None = None,
-    engine_: Engine = engine,
-):
-    """
-    Writes a pandas DataFrame to a SQL table.
-
-    - Columns MUST match DB schema exactly (including case/quotes for spaced names).
-    - method: 'append' | 'upsert'
-    """
-    if df.empty:
-        print(f"  DataFrame for table '{table_name}' is empty. Skipping write.")
-        return
-
-    if method not in ('append', 'upsert'):
-        raise ValueError("method must be 'append' or 'upsert'")
-
-    if method == 'append':
-        print(f"  Appending {len(df)} rows to {table_name}...")
-        with engine_.connect() as conn:
-            df.to_sql(table_name, conn, if_exists='append', index=False, chunksize=1000)
-        return
-
-    # --- upsert path ---
-    if not pkey_cols:
-        raise ValueError("pkey_cols is required for upsert")
-
-    temp_table_name = f"temp_{table_name}_{str(uuid.uuid4()).replace('-', '')}"
-
-    # stage to temp table (exact column names)
-    with engine_.connect() as conn:
-        df.to_sql(temp_table_name, conn, if_exists='replace', index=False, chunksize=1000)
-
-    cols_raw = list(df.columns)
-    cols_ins = [_pg_ident(c) for c in cols_raw]
-    pkeys = [_pg_ident(c) for c in pkey_cols]
-    updatable = [c for c in cols_ins if c not in pkeys]
-
-    update_clause = (
-        "UPDATE SET " + ", ".join([f"{c} = EXCLUDED.{c}" for c in updatable])
-        if updatable else "NOTHING"
+def _get_minio_client() -> Minio:
+    return Minio(
+        MINIO_ENDPOINT,
+        access_key=MINIO_ACCESS_KEY,
+        secret_key=MINIO_SECRET_KEY,
+        secure=MINIO_SECURE,
     )
 
-    insert_cols_clause = ", ".join(cols_ins)
-    pkey_clause = ", ".join(pkeys)
 
-    sql = f"""
-    INSERT INTO {_pg_ident(table_name)} ({insert_cols_clause})
-    SELECT {insert_cols_clause} FROM {_pg_ident(temp_table_name)}
-    ON CONFLICT ({pkey_clause}) DO {update_clause};
+def _list_excel_objects(prefix: str) -> List[Dict[str, Any]]:
     """
+    List *.xlsx objects under the given prefix in the landing bucket.
+    """
+    client = _get_minio_client()
+    objects: List[Dict[str, Any]] = []
+    for obj in client.list_objects(MINIO_LANDING_BUCKET, prefix=prefix, recursive=True):
+        if obj.object_name.lower().endswith(".xlsx"):
+            objects.append({"object_name": obj.object_name})
+    return objects
 
-    print(f"  Upserting {len(df)} rows into {table_name}...")
+
+def _load_excel_from_minio(object_name: str) -> io.BytesIO:
+    """
+    Load an Excel object from MinIO into memory as BytesIO.
+    """
+    client = _get_minio_client()
+    response = client.get_object(MINIO_LANDING_BUCKET, object_name)
     try:
-        _execute_sql(sql, engine_)
+        data = response.read()
     finally:
-        _execute_sql(f'DROP TABLE IF EXISTS {_pg_ident(temp_table_name)};', engine_)
-
-
-def read_sql_to_df(sql_query_or_table: str, engine_: Engine = engine) -> pd.DataFrame:
-    """
-    Reads data from a SQL table or query into a DataFrame.
-    Accepts a full SELECT or a bare table name.
-    """
-    print(f"  Reading from SQL: {sql_query_or_table}...")
-    try:
-        with engine_.connect() as conn:
-            is_table = sql_query_or_table.strip().upper().startswith("SELECT") is False \
-                       and " " not in sql_query_or_table.strip()
-            if is_table:
-                df = pd.read_sql(f'SELECT * FROM {_pg_ident(sql_query_or_table)}', conn)
-            else:
-                df = pd.read_sql(sql_query_or_table, conn)
-        print(f"  Successfully read {len(df)} rows.")
-        return df
-    except Exception as e:
-        print(f"❌ Error reading from SQL {sql_query_or_table}: {e}")
-        raise
-
-
-# -------------------------
-# MinIO I/O
-# -------------------------
-def get_csv_from_minio(bucket: str, object_name: str) -> pd.DataFrame:
-    """Download a CSV from MinIO to a DataFrame."""
-    if not minio_client:
-        print(f"MinIO client not available. Cannot download {object_name}.")
-        return pd.DataFrame()
-
-    try:
-        print(f"  Downloading from MinIO: {bucket}/{object_name}")
-        response = minio_client.get_object(bucket, object_name)
-        file_content = BytesIO(response.read())
-        df = pd.read_csv(file_content)
         response.close()
         response.release_conn()
-        return df
-    except S3Error as e:
-        print(f"Error getting file from MinIO at {bucket}/{object_name}: {e}")
-        return pd.DataFrame()
+    return io.BytesIO(data)
 
 
-def upload_df_to_minio(df: pd.DataFrame, bucket: str, object_name: str, index: bool = False):
-    """Upload a DataFrame CSV to MinIO."""
-    if not minio_client:
-        print("MinIO client not available. Skipping upload.")
+def get_sales_files_from_minio() -> List[Dict[str, Any]]:
+    """
+    Return list of sales files:
+    [{"object_name": str, "fileobj": BytesIO}, ...]
+    from landing/raw_sales/.
+    """
+    files: List[Dict[str, Any]] = []
+    for meta in _list_excel_objects(RAW_SALES_PREFIX):
+        fileobj = _load_excel_from_minio(meta["object_name"])
+        files.append({"object_name": meta["object_name"], "fileobj": fileobj})
+    return files
+
+
+def get_sales_by_product_files_from_minio() -> List[Dict[str, Any]]:
+    """
+    Return list of sales-by-product files:
+    [{"object_name": str, "fileobj": BytesIO}, ...]
+    from landing/raw_sales_by_product/.
+    """
+    files: List[Dict[str, Any]] = []
+    for meta in _list_excel_objects(RAW_SALES_BY_PRODUCT_PREFIX):
+        fileobj = _load_excel_from_minio(meta["object_name"])
+        files.append({"object_name": meta["object_name"], "fileobj": fileobj})
+    return files
+
+
+# =========================
+# POSTGRES HELPERS
+# =========================
+
+def _get_pg_conn():
+    return psycopg2.connect(
+        host=PG_HOST,
+        port=PG_PORT,
+        dbname=PG_DBNAME,
+        user=PG_USER,
+        password=PG_PASSWORD,
+    )
+
+
+def upsert_dataframe(
+    df: pd.DataFrame,
+    table_name: str,
+    key_columns: Optional[List[str]] = None,
+):
+    """
+    Generic UPSERT.
+    - df: columns already in snake_case to match table.
+    - key_columns: if provided, used in ON CONFLICT.
+    """
+    if df is None or df.empty:
         return
 
-    csv_bytes = df.to_csv(index=index).encode('utf-8')
-    csv_buffer = BytesIO(csv_bytes)
+    cols = list(df.columns)
+    records = [tuple(row[c] for c in cols) for _, row in df.iterrows()]
+    col_list = ", ".join(f'"{c}"' for c in cols)
 
-    try:
-        minio_client.put_object(
-            bucket,
-            object_name,
-            data=csv_buffer,
-            length=len(csv_bytes),
-            content_type='text/csv',  # fix content type
-        )
-        print(f"  Successfully uploaded to MinIO: {bucket}/{object_name}")
-    except S3Error as e:
-        print(f"Error uploading {object_name} to MinIO: {e}")
+    if key_columns:
+        conflict_cols = ", ".join(f'"{c}"' for c in key_columns)
+        update_cols = [c for c in cols if c not in key_columns]
+        if update_cols:
+            set_clause = ", ".join(
+                f'"{c}" = EXCLUDED."{c}"' for c in update_cols
+            )
+            sql = f"""
+                INSERT INTO {table_name} ({col_list})
+                VALUES %s
+                ON CONFLICT ({conflict_cols})
+                DO UPDATE SET {set_clause}
+            """
+        else:
+            sql = f"""
+                INSERT INTO {table_name} ({col_list})
+                VALUES %s
+                ON CONFLICT ({conflict_cols})
+                DO NOTHING
+            """
+    else:
+        sql = f"""
+            INSERT INTO {table_name} ({col_list})
+            VALUES %s
+        """
+
+    with _get_pg_conn() as conn:
+        with conn.cursor() as cur:
+            execute_values(cur, sql, records, page_size=1000)
+        conn.commit()
+
+
+# =========================
+# TABLE-SPECIFIC UPSERT WRAPPERS
+# =========================
+
+def upsert_fact_transaction_dimension(df: pd.DataFrame):
+    # Unique grain assumption: (date, receipt_no, product_id, time_id)
+    key_cols = [c for c in ["date", "receipt_no", "product_id", "time_id"] if c in df.columns]
+    upsert_dataframe(df, "fact_transaction_dimension", key_cols)
+
+
+def upsert_current_product_dimension(df: pd.DataFrame):
+    key_cols = [c for c in ["product_id"] if c in df.columns]
+    upsert_dataframe(df, "current_product_dimension", key_cols)
+
+
+def upsert_history_product_dimension(df: pd.DataFrame):
+    key_cols = [c for c in ["product_id", "record_version"] if c in df.columns]
+    upsert_dataframe(df, "history_product_dimension", key_cols)
+
+
+def upsert_transaction_records(df: pd.DataFrame):
+    key_cols = [c for c in ["receipt_no"] if c in df.columns]
+    upsert_dataframe(df, "transaction_records", key_cols)
+
+
+def upsert_time_dimension(df: pd.DataFrame):
+    key_cols = [c for c in ["time_id"] if c in df.columns]
+    upsert_dataframe(df, "time_dimension", key_cols)
+
+
+# =========================
+# HISTORY HELPERS (for incremental SCD)
+# =========================
+
+def has_history_product_dimension() -> bool:
+    """
+    True if history_product_dimension exists and has at least one row.
+    Used to choose between full build (initial load) vs incremental.
+    """
+    with _get_pg_conn() as conn:
+        with conn.cursor() as cur:
+            # Table exists?
+            cur.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = 'history_product_dimension'
+                )
+                """
+            )
+            exists = cur.fetchone()[0]
+            if not exists:
+                return False
+
+            # Has data?
+            cur.execute("SELECT EXISTS (SELECT 1 FROM history_product_dimension LIMIT 1)")
+            has_rows = cur.fetchone()[0]
+            return bool(has_rows)
+
+
+def fetch_history_for_products(product_ids: List[str]) -> pd.DataFrame:
+    """
+    Fetch existing history rows for given product_ids from history_product_dimension.
+    """
+    if not product_ids:
+        return pd.DataFrame()
+
+    with _get_pg_conn() as conn:
+        query = """
+            SELECT
+                product_id,
+                product_name,
+                price,
+                record_version,
+                is_current,
+                last_transaction_date,
+                parent_sku,
+                category,
+                product_cost
+            FROM history_product_dimension
+            WHERE product_id = ANY(%s)
+        """
+        return pd.read_sql(query, conn, params=(product_ids,))
