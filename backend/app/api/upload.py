@@ -14,7 +14,7 @@ import logging
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
 from typing import List
 
-from app.services.auth import get_current_user
+# from app.services.auth import get_current_user
 from app.services.storage import upload_file_to_minio, create_complete_marker
 from app.core.config import settings
 
@@ -42,13 +42,13 @@ async def handle_file_upload(
     files: List[UploadFile] = File(...),
     # The 'Depends' on get_current_user handles JWT validation.
     # If the token is invalid, it will raise a 401 Unauthorized error automatically.
-    current_user: dict = Depends(get_current_user),
+    ##current_user: dict = Depends(get_current_user),
 ):
     """
     Handles the main file upload flow. It authenticates the user, validates
     files, uploads them to MinIO, and triggers the processing pipeline.
     """
-    log.info(f"Upload request received from user: {current_user.get('email')}")
+    ##log.info(f"Upload request received from user: {current_user.get('email')}")
 
     uploaded_files_details = []
 

@@ -1,56 +1,56 @@
--- Connect to the 'booklatte' database to ensure views are created in the correct place.
-\c booklatte;
+-- -- Connect to the 'booklatte' database to ensure views are created in the correct place.
+-- \c booklatte;
 
--- 1. Daily Sales Summary
--- (Daily, Monthly, Quarterly, Annual Trends, and Monthly Transaction vs. Revenue).
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_daily_sales_summary AS
-SELECT
-    "Date",
-    -- Use DATE_TRUNC to get consistent start-of-period dates for easy grouping
-    DATE_TRUNC('month', "Date") AS month,
-    DATE_TRUNC('quarter', "Date") AS quarter,
-    DATE_TRUNC('year', "Date") AS year,
-    SUM("Net Total") AS total_revenue,
-    COUNT(DISTINCT "Receipt No") AS total_transactions
-FROM
-    fact_transaction_dimension
-GROUP BY
-    "Date"
-ORDER BY
-    "Date";
+-- -- 1. Daily Sales Summary
+-- -- (Daily, Monthly, Quarterly, Annual Trends, and Monthly Transaction vs. Revenue).
+-- CREATE MATERIALIZED VIEW IF NOT EXISTS mv_daily_sales_summary AS
+-- SELECT
+--     "Date",
+--     -- Use DATE_TRUNC to get consistent start-of-period dates for easy grouping
+--     DATE_TRUNC('month', "Date") AS month,
+--     DATE_TRUNC('quarter', "Date") AS quarter,
+--     DATE_TRUNC('year', "Date") AS year,
+--     SUM("Net Total") AS total_revenue,
+--     COUNT(DISTINCT "Receipt No") AS total_transactions
+-- FROM
+--     fact_transaction_dimension
+-- GROUP BY
+--     "Date"
+-- ORDER BY
+--     "Date";
 
--- 2. Category Sales Summary
--- This view aggregates revenue for each product category. It directly powers the 'Revenue by Category' pie chart.
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_category_sales_summary AS
-SELECT
-    p."CATEGORY",
-    SUM(f."Line Total") AS total_revenue
-FROM
-    fact_transaction_dimension AS f
-JOIN
-    current_product_dimension AS p ON f."Product ID" = p.product_id
-GROUP BY
-    p."CATEGORY";
+-- -- 2. Category Sales Summary
+-- -- This view aggregates revenue for each product category. It directly powers the 'Revenue by Category' pie chart.
+-- CREATE MATERIALIZED VIEW IF NOT EXISTS mv_category_sales_summary AS
+-- SELECT
+--     p."CATEGORY",
+--     SUM(f."Line Total") AS total_revenue
+-- FROM
+--     fact_transaction_dimension AS f
+-- JOIN
+--     current_product_dimension AS p ON f."Product ID" = p.product_id
+-- GROUP BY
+--     p."CATEGORY";
 
--- 3. Product Performance Summary
--- all 'Top 10' bar charts by filtering for the desired category ('FOOD' or 'DRINK') and sorting.
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_product_sales_summary AS
-SELECT
-    p.product_id,
-    p.product_name,
-    p."CATEGORY",
-    SUM(f."Qty") AS total_quantity_sold,
-    SUM(f."Line Total") AS total_revenue
-FROM
-    fact_transaction_dimension AS f
-JOIN
-    current_product_dimension AS p ON f."Product ID" = p.product_id
-GROUP BY
-    p.product_id,
-    p.product_name,
-    p."CATEGORY";
+-- -- 3. Product Performance Summary
+-- -- all 'Top 10' bar charts by filtering for the desired category ('FOOD' or 'DRINK') and sorting.
+-- CREATE MATERIALIZED VIEW IF NOT EXISTS mv_product_sales_summary AS
+-- SELECT
+--     p.product_id,
+--     p.product_name,
+--     p."CATEGORY",
+--     SUM(f."Qty") AS total_quantity_sold,
+--     SUM(f."Line Total") AS total_revenue
+-- FROM
+--     fact_transaction_dimension AS f
+-- JOIN
+--     current_product_dimension AS p ON f."Product ID" = p.product_id
+-- GROUP BY
+--     p.product_id,
+--     p.product_name,
+--     p."CATEGORY";
 
---Note to self. Need to refresh materialized views in Python script after ETL dims are created.
--- REFRESH MATERIALIZED VIEW mv_daily_sales_summary;
--- REFRESH MATERIALIZED VIEW mv_category_sales_summary;
--- REFRESH MATERIALIZED VIEW mv_product_sales_summary;
+-- --Note to self. Need to refresh materialized views in Python script after ETL dims are created.
+-- -- REFRESH MATERIALIZED VIEW mv_daily_sales_summary;
+-- -- REFRESH MATERIALIZED VIEW mv_category_sales_summary;
+-- -- REFRESH MATERIALIZED VIEW mv_product_sales_summary;

@@ -6,28 +6,33 @@ import pandas as pd
 from minio import Minio
 import psycopg2
 from psycopg2.extras import execute_values
+from app.core.config import settings
 
+from dotenv import load_dotenv
+load_dotenv()
 
 # =========================
 # CONFIG
 # =========================
 
-MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
-MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
-MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
+MINIO_ENDPOINT = settings.minio_endpoint
+MINIO_ACCESS_KEY = settings.minio_access
+MINIO_SECRET_KEY = settings.minio_secret
+MINIO_SECURE = settings.minio_secure
 
-MINIO_LANDING_BUCKET = os.getenv("MINIO_LANDING_BUCKET", "landing")
-RAW_SALES_PREFIX = os.getenv("MINIO_RAW_SALES_PREFIX", "raw_sales/")
-RAW_SALES_BY_PRODUCT_PREFIX = os.getenv(
-    "MINIO_RAW_SALES_BY_PRODUCT_PREFIX", "raw_sales_by_product/"
-)
+MINIO_LANDING_BUCKET = settings.minio_landing_bucket
+RAW_SALES_PREFIX = settings.minio_raw_sales_folder
+RAW_SALES_BY_PRODUCT_PREFIX = settings.minio_raw_sales_by_product_folder
 
-PG_HOST = os.getenv("PG_HOST", "localhost")
-PG_PORT = int(os.getenv("PG_PORT", "5432"))
-PG_DBNAME = os.getenv("PG_DBNAME", "postgres")
-PG_USER = os.getenv("PG_USER", "postgres")
-PG_PASSWORD = os.getenv("PG_PASSWORD", "postgres")
+# NEW: staging buffer
+MINIO_STAGING_BUCKET = settings.minio_staging_bucket
+MINIO_ETL_FOLDER = settings.minio_etl_folder
+
+PG_HOST = settings.db_host
+PG_PORT = settings.db_port
+PG_DBNAME = settings.db_name
+PG_USER = settings.db_user
+PG_PASSWORD = settings.db_password
 
 
 # =========================
@@ -41,6 +46,44 @@ def _get_minio_client() -> Minio:
         secret_key=MINIO_SECRET_KEY,
         secure=MINIO_SECURE,
     )
+
+def _ensure_staging_bucket() -> None:
+    """Create staging bucket if missing (idempotent)."""
+    client = _get_minio_client()
+    if not client.bucket_exists(MINIO_STAGING_BUCKET):
+        client.make_bucket(MINIO_STAGING_BUCKET)
+
+def staging_put_bytes(object_name: str, data: bytes, content_type: str = "text/csv") -> int:
+    """Upload raw bytes to staging bucket under given object name."""
+    _ensure_staging_bucket()
+    client = _get_minio_client()
+    bio = io.BytesIO(data)
+    client.put_object(
+        bucket_name=MINIO_STAGING_BUCKET,
+        object_name=object_name,
+        data=bio,
+        length=len(data),
+        content_type=content_type,
+    )
+    return len(data)
+
+def staging_get_bytes(object_name: str) -> bytes:
+    """Download object from staging bucket to bytes."""
+    client = _get_minio_client()
+    resp = client.get_object(MINIO_STAGING_BUCKET, object_name)
+    try:
+        return resp.read()
+    finally:
+        resp.close()
+        resp.release_conn()
+
+def staging_delete_prefix(prefix: str) -> None:
+    """Delete all objects under a prefix in staging bucket."""
+    client = _get_minio_client()
+    if prefix and not prefix.endswith("/"):
+        prefix = prefix + "/"
+    for obj in client.list_objects(MINIO_STAGING_BUCKET, prefix=prefix, recursive=True):
+        client.remove_object(MINIO_STAGING_BUCKET, obj.object_name)
 
 
 def _list_excel_objects(prefix: str) -> List[Dict[str, Any]]:
@@ -108,6 +151,17 @@ def _get_pg_conn():
         password=PG_PASSWORD,
     )
 
+def copy_csv_bytes_to_table(csv_bytes: bytes, table_name: str, columns: List[str]) -> None:
+    """
+    Bulk load with COPY FROM STDIN (HEADER). We explicitly list columns to avoid
+    reliance on physical column order.
+    """
+    collist = ", ".join(f'"{c}"' for c in columns)
+    copy_sql = f"COPY {table_name} ({collist}) FROM STDIN WITH (FORMAT CSV, HEADER TRUE)"
+    with _get_pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.copy_expert(copy_sql, io.StringIO(csv_bytes.decode("utf-8")))
+        conn.commit()
 
 def upsert_dataframe(
     df: pd.DataFrame,
@@ -115,9 +169,7 @@ def upsert_dataframe(
     key_columns: Optional[List[str]] = None,
 ):
     """
-    Generic UPSERT.
-    - df: columns already in snake_case to match table.
-    - key_columns: if provided, used in ON CONFLICT.
+    Legacy generic UPSERT (still here; not used by buffer flow).
     """
     if df is None or df.empty:
         return
@@ -159,11 +211,10 @@ def upsert_dataframe(
 
 
 # =========================
-# TABLE-SPECIFIC UPSERT WRAPPERS
+# TABLE-SPECIFIC UPSERT WRAPPERS (legacy)
 # =========================
 
 def upsert_fact_transaction_dimension(df: pd.DataFrame):
-    # Unique grain assumption: (date, receipt_no, product_id, time_id)
     key_cols = [c for c in ["date", "receipt_no", "product_id", "time_id"] if c in df.columns]
     upsert_dataframe(df, "fact_transaction_dimension", key_cols)
 
@@ -193,13 +244,8 @@ def upsert_time_dimension(df: pd.DataFrame):
 # =========================
 
 def has_history_product_dimension() -> bool:
-    """
-    True if history_product_dimension exists and has at least one row.
-    Used to choose between full build (initial load) vs incremental.
-    """
     with _get_pg_conn() as conn:
         with conn.cursor() as cur:
-            # Table exists?
             cur.execute(
                 """
                 SELECT EXISTS (
@@ -212,16 +258,12 @@ def has_history_product_dimension() -> bool:
             if not exists:
                 return False
 
-            # Has data?
             cur.execute("SELECT EXISTS (SELECT 1 FROM history_product_dimension LIMIT 1)")
             has_rows = cur.fetchone()[0]
             return bool(has_rows)
 
 
 def fetch_history_for_products(product_ids: List[str]) -> pd.DataFrame:
-    """
-    Fetch existing history rows for given product_ids from history_product_dimension.
-    """
     if not product_ids:
         return pd.DataFrame()
 
@@ -233,7 +275,7 @@ def fetch_history_for_products(product_ids: List[str]) -> pd.DataFrame:
                 price,
                 record_version,
                 is_current,
-                last_transaction_date,
+                last_transaction_datetime,
                 parent_sku,
                 category,
                 product_cost
@@ -241,3 +283,23 @@ def fetch_history_for_products(product_ids: List[str]) -> pd.DataFrame:
             WHERE product_id = ANY(%s)
         """
         return pd.read_sql(query, conn, params=(product_ids,))
+
+
+# =========================
+# NEW: BULK LOAD ORCHESTRATION FROM STAGING/ETL
+# =========================
+
+def bulk_load_from_staging(prefix: str, plan: List[Dict[str, Any]]) -> None:
+    """
+    prefix: e.g. 'etl/20251112_210315/' (with or without trailing '/')
+    plan: list of dicts with keys:
+      - table: postgres table name
+      - filename: object name under prefix
+      - columns: ordered column list in the CSV
+    """
+    if prefix and not prefix.endswith("/"):
+        prefix = prefix + "/"
+    for step in plan:
+        obj_name = prefix + step["filename"]
+        csv_bytes = staging_get_bytes(obj_name)
+        copy_csv_bytes_to_table(csv_bytes, step["table"], step["columns"])

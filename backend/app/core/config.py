@@ -9,6 +9,8 @@ where Docker Compose injects the necessary variables at runtime.
 import os
 from typing import List
 from urllib.parse import quote_plus
+from dotenv import load_dotenv
+load_dotenv() 
 
 def _str_to_bool(v: str | None, default: bool = False) -> bool:
     """
@@ -29,7 +31,7 @@ class Settings:
     cors_origins: List[str] = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
 
     # Database (components)
-    db_host: str = os.getenv("POSTGRES_HOST", "postgres")
+    db_host: str = os.getenv("POSTGRES_HOST", "localhost")
     db_port: int = int(os.getenv("POSTGRES_PORT", "5432"))
     db_user: str = os.getenv("POSTGRES_USER", "booklatte")
     db_password: str = os.getenv("POSTGRES_PASSWORD", "password")
@@ -48,14 +50,15 @@ class Settings:
     db_pool_timeout: int = int(os.getenv("DB_POOL_TIMEOUT", "30"))
 
     # Object Storage (MinIO)
-    minio_endpoint: str = os.getenv("MINIO_ENDPOINT", "minio:9000")
+    minio_endpoint: str = os.getenv("MINIO_ENDPOINT", "localhost:9000")
     minio_access: str = os.getenv("MINIO_ROOT_USER", "booklatte")
     minio_secret: str = os.getenv("MINIO_ROOT_PASSWORD", "password")
     minio_secure: bool = _str_to_bool(os.getenv("MINIO_SECURE", "false"))
     minio_landing_bucket: str = os.getenv("MINIO_LANDING_BUCKET", "landing")
-    minio_raw_sales_folder: str = os.getenv("MINIO_RAW_SALES_FOLDER", "raw_sales")
+    minio_raw_sales_folder: str = os.getenv("MINIO_RAW_SALES_FOLDER", "raw_sales_by_transaction")
     minio_raw_sales_by_product_folder: str = os.getenv("MINIO_RAW_SALES_BY_PRODUCT_FOLDER", "raw_sales_by_product")
     minio_staging_bucket: str = os.getenv("MINIO_STAGING_BUCKET", "staging")
+    minio_etl_folder: str = os.getenv("MINIO_ETL_FOLDER", "etl")
     
     # Pipeline Trigger
     trigger_dir: str = os.getenv("TRIGGER_DIR", "/app/trigger")

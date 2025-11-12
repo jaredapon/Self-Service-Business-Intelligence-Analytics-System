@@ -5,13 +5,134 @@ from functools import lru_cache
 
 import numpy as np
 import pandas as pd
+from typing import List
 
-import loader  # centralized I/O
+from . import loader
 
+from app.core.config import settings
+from minio import Minio
+import io
+import psycopg2
 
-pd.set_option("display.max_rows", None)
-pd.set_option("display.max_columns", None)
+# =========================
+# STAGING / COPY HELPERS (for buffer-based load)
+# =========================
 
+def _get_minio_client_for_etl():
+    return Minio(
+        settings.minio_endpoint,
+        access_key=settings.minio_access,
+        secret_key=settings.minio_secret,
+        secure=settings.minio_secure,
+    )
+
+def _ensure_staging_bucket_for_etl():
+    client = _get_minio_client_for_etl()
+    bucket = settings.minio_staging_bucket
+    found = client.bucket_exists(bucket)
+    if not found:
+        client.make_bucket(bucket)
+
+def _staging_put_bytes_etl(object_name: str, data: bytes, content_type: str = "text/csv") -> int:
+    _ensure_staging_bucket_for_etl()
+    client = _get_minio_client_for_etl()
+    bio = io.BytesIO(data)
+    client.put_object(
+        bucket_name=settings.minio_staging_bucket,
+        object_name=object_name,
+        data=bio,
+        length=len(data),
+        content_type=content_type,
+    )
+    return len(data)
+
+def _staging_get_bytes_etl(object_name: str) -> bytes:
+    client = _get_minio_client_for_etl()
+    resp = client.get_object(settings.minio_staging_bucket, object_name)
+    try:
+        return resp.read()
+    finally:
+        resp.close()
+        resp.release_conn()
+
+def _staging_delete_prefix_etl(prefix: str) -> None:
+    client = _get_minio_client_for_etl()
+    if prefix and not prefix.endswith('/'):
+        prefix = prefix + '/'
+    for obj in client.list_objects(settings.minio_staging_bucket, prefix=prefix, recursive=True):
+        client.remove_object(settings.minio_staging_bucket, obj.object_name)
+
+def _pg_connect_for_etl():
+    return psycopg2.connect(
+        host=settings.db_host,
+        port=settings.db_port,
+        dbname=settings.db_name,
+        user=settings.db_user,
+        password=settings.db_password,
+    )
+
+def _upsert_via_temp_table(csv_bytes: bytes, table_name: str, columns: List[str], key_columns: List[str]) -> None:
+    """
+    Load CSV to temp table via COPY, then UPSERT into final table.
+    """
+    temp_table = f"temp_{table_name}_{int(time.time() * 1000)}"
+    collist = ", ".join(f'"{c}"' for c in columns)
+    
+    with _pg_connect_for_etl() as conn:
+        with conn.cursor() as cur:
+            # Create temp table with same structure
+            cur.execute(f"CREATE TEMP TABLE {temp_table} (LIKE {table_name} INCLUDING DEFAULTS)")
+            
+            # COPY into temp table
+            copy_sql = f"COPY {temp_table} ({collist}) FROM STDIN WITH (FORMAT CSV, HEADER TRUE)"
+            cur.copy_expert(copy_sql, io.StringIO(csv_bytes.decode('utf-8')))
+            
+            # UPSERT from temp to final
+            if key_columns:
+                conflict_cols = ", ".join(f'"{c}"' for c in key_columns)
+                update_cols = [c for c in columns if c not in key_columns]
+                
+                if update_cols:
+                    set_clause = ", ".join(f'"{c}" = EXCLUDED."{c}"' for c in update_cols)
+                    upsert_sql = f"""
+                        INSERT INTO {table_name} ({collist})
+                        SELECT {collist} FROM {temp_table}
+                        ON CONFLICT ({conflict_cols})
+                        DO UPDATE SET {set_clause}
+                    """
+                else:
+                    upsert_sql = f"""
+                        INSERT INTO {table_name} ({collist})
+                        SELECT {collist} FROM {temp_table}
+                        ON CONFLICT ({conflict_cols})
+                        DO NOTHING
+                    """
+                cur.execute(upsert_sql)
+            else:
+                # No key columns = plain insert
+                insert_sql = f"INSERT INTO {table_name} ({collist}) SELECT {collist} FROM {temp_table}"
+                cur.execute(insert_sql)
+            
+            # Drop temp table
+            cur.execute(f"DROP TABLE {temp_table}")
+        conn.commit()
+
+def _bulk_upsert_from_staging_etl(prefix: str, plan: List[dict]) -> None:
+    """
+    Load CSVs from staging, UPSERT into PostgreSQL via temp tables.
+    Each plan entry must have: table, filename, columns, key_columns
+    """
+    if prefix and not prefix.endswith('/'):
+        prefix = prefix + '/'
+    for step in plan:
+        obj_name = prefix + step['filename']
+        csv_bytes = _staging_get_bytes_etl(obj_name)
+        _upsert_via_temp_table(
+            csv_bytes,
+            step['table'],
+            step['columns'],
+            step.get('key_columns', [])
+        )
 
 # =========================
 # NAMING HELPERS (for final outputs only)
@@ -28,12 +149,10 @@ def to_snake_case(name: str) -> str:
     name = re.sub(r"_+", "_", name)
     return name.strip("_").lower()
 
-
 def rename_columns_snake_case(df: pd.DataFrame) -> pd.DataFrame:
     if df is None:
         return df
     return df.rename(columns={c: to_snake_case(c) for c in df.columns})
-
 
 # =========================
 # INPUT PARSING (legacy behavior)
@@ -58,7 +177,6 @@ def process_sales_file(file_obj):
     df = df.loc[:, ~df.columns.isna()]
     return df
 
-
 def process_product_file(file_obj):
     """Process individual product file to handle varying structures (legacy logic)."""
     df = pd.read_excel(file_obj)
@@ -78,9 +196,8 @@ def process_product_file(file_obj):
     df = df.loc[:, ~df.columns.isna()]
     return df
 
-
 # =========================
-# TIME DIMENSION (legacy weirdness)
+# TIME DIMENSION
 # =========================
 
 def create_time_dimension(_date_series):
@@ -89,7 +206,7 @@ def create_time_dimension(_date_series):
     Ignores input; kept for legacy compatibility.
     """
     hour_rows = []
-    for h in range(1, 24):
+    for h in range(0, 24):
         hour_rows.append({
             "time_id": f"H{h:02}",
             "time_desc": f"{h:02}",
@@ -98,7 +215,7 @@ def create_time_dimension(_date_series):
         })
 
     minute_rows = []
-    for h in range(1, 24):
+    for h in range(0, 24):
         for m in range(0, 60):
             minute_rows.append({
                 "time_id": f"H{h:02}M{m:02}",
@@ -108,7 +225,6 @@ def create_time_dimension(_date_series):
             })
 
     return pd.DataFrame(hour_rows + minute_rows)
-
 
 # =========================
 # COSTING (legacy heuristic)
@@ -125,7 +241,6 @@ def normalize_drink_name(name: str) -> str:
         .replace("OZ", "")
         .replace("CHOCO", "CHOCOLATE")
     )
-
 
 @lru_cache(maxsize=None)
 def get_drink_cost(product_name: str) -> float | None:
@@ -183,7 +298,6 @@ def get_drink_cost(product_name: str) -> float | None:
 
     return None
 
-
 # =========================
 # PRODUCT HELPERS (same logic as legacy, made reusable)
 # =========================
@@ -201,7 +315,6 @@ extra_word_triggers = [
     re.compile(r"\bDIJON\b"),
     re.compile(r"\bEXTRA\b"),
 ]
-
 
 def compute_parent_sku(name: str) -> str:
     if not isinstance(name, str) or name.strip() == "":
@@ -229,7 +342,6 @@ def compute_parent_sku(name: str) -> str:
         tokens.pop()
     return "-".join(tokens)
 
-
 def infer_category(product_name: str, product_id: str) -> str:
     if not isinstance(product_name, str):
         product_name = ""
@@ -253,14 +365,12 @@ def infer_category(product_name: str, product_id: str) -> str:
 
     return category
 
-
 def calculate_product_cost(product_name: str, category: str, price):
     if category == "DRINK":
         cost = get_drink_cost(product_name)
         if cost:
             return cost
     return round(price * 0.60, 2) if pd.notna(price) else np.nan
-
 
 # =========================
 # EXTRACT (MinIO landing)
@@ -270,7 +380,7 @@ def extract():
     print("=== EXTRACT PHASE ===")
 
     # Sales Transactions from MinIO
-    print("Extracting Excel Sales Transactions List from MinIO landing/raw_sales ...")
+    print("Extracting Excel Sales Transactions List from MinIO landing/raw_sales_by_transaction ...")
     sales_files_meta = loader.get_sales_files_from_minio()
     sales_dfs = [process_sales_file(m["fileobj"]) for m in sales_files_meta] if sales_files_meta else []
 
@@ -378,7 +488,6 @@ def extract():
 
     print("Extract phase completed successfully.")
     return sales_df, sales_by_product_df
-
 
 # =========================
 # TRANSFORM (legacy logic, no CSV writes)
@@ -692,9 +801,8 @@ def transform(sales_df, sales_by_product_df):
     print("Transform phase completed successfully.")
     return combined_df
 
-
 # =========================
-# PRODUCT DIMENSIONS - FULL BUILD (initial 5-year load)
+# PRODUCT DIMENSIONS - FULL BUILD
 # =========================
 
 def create_product_dimensions_full(combined_df: pd.DataFrame):
@@ -714,6 +822,8 @@ def create_product_dimensions_full(combined_df: pd.DataFrame):
 
     product_columns = ["product_id", "product_name", "Price"]
     available_product_columns = [c for c in product_columns if c in df.columns]
+    if "DateTime" in combined_df.columns:
+        available_product_columns.append("DateTime")
     if "Date" in df.columns:
         available_product_columns.append("Date")
 
@@ -724,9 +834,13 @@ def create_product_dimensions_full(combined_df: pd.DataFrame):
     current_product_dim["record_version"] = 1
     current_product_dim["is_current"] = True
 
-    if "Date" in current_product_dim.columns:
+    if "DateTime" in current_product_dim.columns:
         current_product_dim = current_product_dim.rename(
-            columns={"Date": "last_transaction_date"}
+            columns={"DateTime": "last_transaction_datetime"}
+        )
+    elif "Date" in current_product_dim.columns:
+        current_product_dim = current_product_dim.rename(
+            columns={"Date": "last_transaction_datetime"}
         )
 
     # parent_sku + CATEGORY + product_cost
@@ -799,16 +913,19 @@ def create_product_dimensions_full(combined_df: pd.DataFrame):
         cols.insert(insert_pos, "product_cost")
         history_product_dim = history_product_dim[cols]
 
-    if "Date" in history_product_dim.columns:
+    if "DateTime" in history_product_dim.columns:
         history_product_dim = history_product_dim.rename(
-            columns={"Date": "last_transaction_date"}
+            columns={"DateTime": "last_transaction_datetime"}
+        )
+    elif "Date" in history_product_dim.columns:
+        history_product_dim = history_product_dim.rename(
+            columns={"Date": "last_transaction_datetime"}
         )
 
     return current_product_dim, history_product_dim
 
-
 # =========================
-# PRODUCT DIMENSIONS - INCREMENTAL (Scenario 1)
+# PRODUCT DIMENSIONS - INCREMENTAL
 # =========================
 
 def create_product_dimensions_incremental(combined_df: pd.DataFrame):
@@ -829,10 +946,12 @@ def create_product_dimensions_incremental(combined_df: pd.DataFrame):
     df = combined_df.copy()
     df = df.rename(columns={"Product ID": "product_id", "Product Name": "product_name"})
 
-    if "Date" in df.columns:
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    if "DateTime" in combined_df.columns:
+        df["DateTime"] = pd.to_datetime(df["DateTime"], errors="coerce")
+    elif "Date" in df.columns:
+        df["DateTime"] = pd.to_datetime(df["Date"], errors="coerce")
     else:
-        df["Date"] = pd.NaT
+        df["DateTime"] = pd.NaT
 
     df = df.dropna(subset=["product_id", "Price"])
 
@@ -841,7 +960,7 @@ def create_product_dimensions_incremental(combined_df: pd.DataFrame):
 
     # Latest state per product in THIS batch
     batch_latest = (
-        df.sort_values("Date")
+        df.sort_values("DateTime")
           .groupby("product_id", as_index=False)
           .last()
     )
@@ -856,7 +975,7 @@ def create_product_dimensions_incremental(combined_df: pd.DataFrame):
         pid = str(row["product_id"])
         pname = str(row["product_name"])
         new_price = float(row["Price"])
-        new_date = row["Date"] if not pd.isna(row["Date"]) else None
+        new_datetime = row["DateTime"] if not pd.isna(row["DateTime"]) else None
 
         existing_pid = existing_hist[existing_hist["product_id"] == pid]
 
@@ -873,7 +992,7 @@ def create_product_dimensions_incremental(combined_df: pd.DataFrame):
                 "price": new_price,
                 "record_version": new_rv,
                 "is_current": True,
-                "last_transaction_date": new_date,
+                "last_transaction_datetime": new_datetime,
                 "parent_sku": parent_sku,
                 "CATEGORY": category,
                 "product_cost": prod_cost,
@@ -885,7 +1004,7 @@ def create_product_dimensions_incremental(combined_df: pd.DataFrame):
                 "price": new_price,
                 "record_version": new_rv,
                 "is_current": True,
-                "last_transaction_date": new_date,
+                "last_transaction_datetime": new_datetime,
                 "parent_sku": parent_sku,
                 "CATEGORY": category,
                 "product_cost": prod_cost,
@@ -900,7 +1019,7 @@ def create_product_dimensions_incremental(combined_df: pd.DataFrame):
 
         old_price = float(cur["price"])
         old_rv = int(cur["record_version"])
-        old_ltd = cur.get("last_transaction_date")
+        old_datetime = cur.get("last_transaction_datetime")
         old_parent_sku = cur.get("parent_sku")
         old_category = cur.get("category") or cur.get("CATEGORY")
         old_cost = cur.get("product_cost")
@@ -913,14 +1032,14 @@ def create_product_dimensions_incremental(combined_df: pd.DataFrame):
                 "price": old_price,
                 "record_version": old_rv,
                 "is_current": True,
-                "last_transaction_date": old_ltd,
+                "last_transaction_datetime": old_datetime,
                 "parent_sku": old_parent_sku,
                 "CATEGORY": old_category,
                 "product_cost": old_cost,
             }
 
-            if new_date and (not old_ltd or pd.isna(old_ltd) or new_date > old_ltd):
-                updated_hist["last_transaction_date"] = new_date
+            if new_datetime and (not old_datetime or pd.isna(old_datetime) or new_datetime > old_datetime):
+                updated_hist["last_transaction_datetime"] = new_datetime
 
             history_rows.append(updated_hist)
 
@@ -930,7 +1049,7 @@ def create_product_dimensions_incremental(combined_df: pd.DataFrame):
                 "price": old_price,
                 "record_version": old_rv,
                 "is_current": True,
-                "last_transaction_date": updated_hist["last_transaction_date"],
+                "last_transaction_datetime": updated_hist["last_transaction_datetime"],
                 "parent_sku": old_parent_sku,
                 "CATEGORY": old_category,
                 "product_cost": old_cost,
@@ -948,7 +1067,7 @@ def create_product_dimensions_incremental(combined_df: pd.DataFrame):
             "price": old_price,
             "record_version": old_rv,
             "is_current": False,
-            "last_transaction_date": old_ltd,
+            "last_transaction_datetime": old_datetime,
             "parent_sku": old_parent_sku,
             "CATEGORY": old_category,
             "product_cost": old_cost,
@@ -966,7 +1085,7 @@ def create_product_dimensions_incremental(combined_df: pd.DataFrame):
             "price": new_price,
             "record_version": new_rv,
             "is_current": True,
-            "last_transaction_date": new_date,
+            "last_transaction_datetime": new_datetime,
             "parent_sku": parent_sku,
             "CATEGORY": category,
             "product_cost": prod_cost,
@@ -979,7 +1098,7 @@ def create_product_dimensions_incremental(combined_df: pd.DataFrame):
             "price": new_price,
             "record_version": new_rv,
             "is_current": True,
-            "last_transaction_date": new_date,
+            "last_transaction_datetime": new_datetime,
             "parent_sku": parent_sku,
             "CATEGORY": category,
             "product_cost": prod_cost,
@@ -990,28 +1109,48 @@ def create_product_dimensions_incremental(combined_df: pd.DataFrame):
 
     return current_product_dim, history_product_dim
 
+# =========================
+# LOAD via BUFFER (MinIO staging → PostgreSQL COPY → UPSERT)
+# =========================
 
-# =========================
-# LOAD (UPSERT, snake_case)
-# =========================
+def _df_dates_to_iso_etl(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce").dt.date.astype(str)
+    return df
+
+def _df_timestamps_to_iso_etl(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+    """Convert timestamp columns to ISO format string."""
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce").dt.strftime('%Y-%m-%d %H:%M:%S')
+    return df
 
 def load(combined_df: pd.DataFrame):
-    print("=== LOAD PHASE ===")
+    print("=== LOAD PHASE (buffer → COPY → UPSERT) ===")
 
     if combined_df is None or combined_df.empty:
         print("Warning: Combined dataframe is empty, no database writes performed")
         print("Load phase completed.")
         return
 
-    # Optional time dimension
-    if "Date" in combined_df.columns:
-        print("Preparing time_dimension (optional)...")
-        time_dim_df = create_time_dimension(combined_df["Date"])
-        time_dim_snake = rename_columns_snake_case(time_dim_df)
-        loader.upsert_time_dimension(time_dim_snake)
-        print("time_dimension upserted (if table exists).")
+    # ---------- 1) Build time_dimension ----------
+    time_dim_df = create_time_dimension(combined_df["Date"]) if "Date" in combined_df.columns else pd.DataFrame()
+    time_dim_snake = rename_columns_snake_case(time_dim_df)
 
-    # Map time_id
+    # ---------- 2) Build product dimensions (BOTH current AND history) ----------
+    if loader.has_history_product_dimension():
+        current_product_dim, history_product_dim = create_product_dimensions_incremental(combined_df)
+    else:
+        current_product_dim, history_product_dim = create_product_dimensions_full(combined_df)
+
+    current_snake = rename_columns_snake_case(current_product_dim) if current_product_dim is not None else pd.DataFrame()
+    current_snake = _df_timestamps_to_iso_etl(current_snake, ["last_transaction_datetime"])
+
+    history_snake = rename_columns_snake_case(history_product_dim) if history_product_dim is not None else pd.DataFrame()
+    history_snake = _df_timestamps_to_iso_etl(history_snake, ["last_transaction_datetime"])
+
+    # ---------- 3) Prepare fact + transaction_records ----------
     def time_to_id(time_str):
         try:
             s = str(time_str).strip()
@@ -1030,113 +1169,139 @@ def load(combined_df: pd.DataFrame):
     else:
         combined_df["time_id"] = None
 
-    # Reorder columns
     priority_columns = [
         "Date", "time_id", "Receipt No", "Product ID", "Product Name",
         "Qty", "Price", "Line Total", "Net Total",
     ]
     existing_priority = [c for c in priority_columns if c in combined_df.columns]
-    remaining = [
-        c for c in combined_df.columns
-        if c not in existing_priority and c != "Time"
-    ]
+    remaining = [c for c in combined_df.columns if c not in existing_priority and c not in ["Time", "DateTime"]]
     final_cols = existing_priority + remaining
 
     if "Time" in combined_df.columns:
         combined_df = combined_df.drop(columns=["Time"])
 
     combined_df = combined_df[final_cols]
-
-    # Remove duplicates for fact
-    print("Removing duplicates from fact transaction dimension...")
     combined_df = combined_df.drop_duplicates().reset_index(drop=True)
-    print(f"After duplicate removal: {len(combined_df)} fact transaction records")
 
-    # Exclude latest month (legacy behavior)
+    # fact_transaction_dimension: exclude latest month
     if "Date" in combined_df.columns:
         combined_df["Date"] = pd.to_datetime(combined_df["Date"], errors="coerce")
         latest_month = combined_df["Date"].dt.to_period("M").max()
-        fact_df = combined_df[
-            combined_df["Date"].dt.to_period("M") != latest_month
-        ].reset_index(drop=True)
+        fact_df = combined_df[combined_df["Date"].dt.to_period("M") != latest_month].reset_index(drop=True)
     else:
-        fact_df = combined_df
+        fact_df = combined_df.copy()
 
-    # fact_transaction_dimension → snake_case → UPSERT
-    fact_df_snake = rename_columns_snake_case(fact_df)
-    loader.upsert_fact_transaction_dimension(fact_df_snake)
-    print("fact_transaction_dimension upserted.")
-
-    # Product dimensions (Scenario 1 safe)
-    print("Creating Product Dimensions (SCD behavior)...")
-    if loader.has_history_product_dimension():
-        # Subsequent runs: incremental based on existing history
-        current_product_dim, history_product_dim = create_product_dimensions_incremental(
-            combined_df
-        )
-    else:
-        # First big run: full history from all data
-        current_product_dim, history_product_dim = create_product_dimensions_full(
-            combined_df
-        )
-
-    # transaction_records (uses parent_sku from current_product_dim if available)
+    # transaction_records: map Product ID → parent_sku
     parent_map = {}
-    if (
-        current_product_dim is not None
-        and "product_id" in current_product_dim.columns
-        and ("parent_sku" in current_product_dim.columns
-             or "parent_sku" in [c.lower() for c in current_product_dim.columns])
-    ):
-        # Handle both CATEGORY vs category column name cases before snake
-        if "parent_sku" in current_product_dim.columns:
-            ps_col = "parent_sku"
-        else:
-            ps_col = [c for c in current_product_dim.columns if c.lower() == "parent_sku"][0]
+    if not current_snake.empty and "product_id" in current_snake.columns and "parent_sku" in current_snake.columns:
+        parent_map = dict(zip(current_snake["product_id"].astype(str), current_snake["parent_sku"].astype(str)))
 
-        parent_map = dict(
-            zip(
-                current_product_dim["product_id"].astype(str),
-                current_product_dim[ps_col].astype(str),
-            )
-        )
-
+    txn_df = pd.DataFrame()
     if "Receipt No" in combined_df.columns and "Product ID" in combined_df.columns:
         tmp = combined_df.copy()
         tmp["Product ID"] = tmp["Product ID"].astype(str)
-        tmp["__parent_sku"] = tmp["Product ID"].map(parent_map).fillna(
-            tmp["Product ID"]
+        tmp["__parent_sku"] = tmp["Product ID"].map(parent_map).fillna(tmp["Product ID"])
+        txn_df = (
+            tmp.groupby("Receipt No")["__parent_sku"].apply(lambda x: ",".join(x.astype(str))).reset_index(name="SKU")
         )
 
-        transaction_records = (
-            tmp.groupby("Receipt No")["__parent_sku"]
-            .apply(lambda x: ",".join(x.astype(str)))
-            .reset_index(name="SKU")
-        )
-        txn_snake = rename_columns_snake_case(transaction_records)
-        loader.upsert_transaction_records(txn_snake)
-        print("transaction_records upserted.")
+    # snake_case + ISO dates
+    fact_snake = rename_columns_snake_case(fact_df)
+    fact_snake = _df_dates_to_iso_etl(fact_snake, ["date"])
+    txn_snake = rename_columns_snake_case(txn_df)
 
-    # Upsert product dimensions
-    if current_product_dim is not None:
-        current_snake = rename_columns_snake_case(current_product_dim)
-        loader.upsert_current_product_dimension(current_snake)
-        print("current_product_dimension upserted.")
+    # ---------- 4) BUFFER: write CSVs to MinIO staging/etl/<run_id>/ ----------
+    run_id = time.strftime("%Y%m%d_%H%M%S")
+    run_prefix = f"{settings.minio_etl_folder}/{run_id}/"
 
-    if history_product_dim is not None:
-        history_snake = rename_columns_snake_case(history_product_dim)
-        loader.upsert_history_product_dimension(history_snake)
-        print("history_product_dimension upserted.")
+    def _to_csv_bytes(df: pd.DataFrame) -> bytes:
+        return df.to_csv(index=False).encode("utf-8")
+
+    # Deduplicate all DataFrames based on their primary keys
+    if not time_dim_snake.empty:
+        time_dim_snake = time_dim_snake.drop_duplicates(subset=["time_id"], keep="last")
+    if not current_snake.empty:
+        current_snake = current_snake.drop_duplicates(subset=["product_id"], keep="last")
+    if not history_snake.empty:
+        history_snake = history_snake.drop_duplicates(subset=["product_id", "record_version"], keep="last")
+    if not txn_snake.empty:
+        txn_snake = txn_snake.drop_duplicates(subset=["receipt_no"], keep="last")
+    if not fact_snake.empty:
+        fact_snake = fact_snake.drop_duplicates(subset=["receipt_no", "date", "product_id"], keep="last")
+
+    artifacts = []
+
+    if not time_dim_snake.empty:
+        time_cols = list(time_dim_snake.columns)
+        _staging_put_bytes_etl(run_prefix + "time_dimension.csv", _to_csv_bytes(time_dim_snake))
+        artifacts.append({
+            "table": "time_dimension",
+            "filename": "time_dimension.csv",
+            "columns": time_cols,
+            "key_columns": ["time_id"]
+        })
+
+    if not current_snake.empty:
+        prod_cols = list(current_snake.columns)
+        _staging_put_bytes_etl(run_prefix + "current_product_dimension.csv", _to_csv_bytes(current_snake))
+        artifacts.append({
+            "table": "current_product_dimension",
+            "filename": "current_product_dimension.csv",
+            "columns": prod_cols,
+            "key_columns": ["product_id"]
+        })
+
+    if not history_snake.empty:
+        hist_cols = list(history_snake.columns)
+        _staging_put_bytes_etl(run_prefix + "history_product_dimension.csv", _to_csv_bytes(history_snake))
+        artifacts.append({
+            "table": "history_product_dimension",
+            "filename": "history_product_dimension.csv",
+            "columns": hist_cols,
+            "key_columns": ["product_id", "record_version"]
+        })
+
+    if not txn_snake.empty:
+        txn_cols = list(txn_snake.columns)
+        _staging_put_bytes_etl(run_prefix + "transaction_records.csv", _to_csv_bytes(txn_snake))
+        artifacts.append({
+            "table": "transaction_records",
+            "filename": "transaction_records.csv",
+            "columns": txn_cols,
+            "key_columns": ["receipt_no"]
+        })
+
+    if not fact_snake.empty:
+        fact_cols = list(fact_snake.columns)
+        _staging_put_bytes_etl(run_prefix + "fact_transaction_dimension.csv", _to_csv_bytes(fact_snake))
+        artifacts.append({
+            "table": "fact_transaction_dimension",
+            "filename": "fact_transaction_dimension.csv",
+            "columns": fact_cols,
+            "key_columns": ["receipt_no", "date", "product_id"]
+        })
+
+    # Load in strict sequence with UPSERT
+    order = ["time_dimension", "current_product_dimension", "history_product_dimension", "transaction_records", "fact_transaction_dimension"]
+    plan = [a for name in order for a in artifacts if a["table"] == name]
+
+    try:
+        _bulk_upsert_from_staging_etl(run_prefix, plan)
+        print("Bulk UPSERT complete. Cleaning buffer …")
+        _staging_delete_prefix_etl(run_prefix)
+        print("Buffer cleared:", run_prefix)
+    except Exception as e:
+        print(f"Bulk load failed. Buffer retained at {run_prefix} for inspection. Error: {e}")
+        raise
 
     print("Load phase completed successfully.")
-
 
 # =========================
 # MAIN
 # =========================
 
 def main():
-    print("Starting ETL Pipeline (MinIO -> legacy rules -> PostgreSQL UPSERT)...")
+    print("Starting ETL Pipeline (MinIO -> legacy rules -> BUFFER -> UPSERT to PostgreSQL)…")
     total_start = time.time()
     try:
         t0 = time.time()
@@ -1158,7 +1323,6 @@ def main():
         traceback.print_exc()
     finally:
         print(f"Total execution time: {time.time() - total_start:.2f} seconds.")
-
 
 if __name__ == "__main__":
     main()
