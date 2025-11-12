@@ -60,15 +60,6 @@ export const Dashboard: React.FC = () => {
         const text = await res.text();
         const trimmedText = text.trim();
 
-        // Guard: make sure we didn’t get HTML
-        if (
-          trimmedText.toLowerCase().startsWith('<!doctype html') ||
-          trimmedText.toLowerCase().startsWith('<html')
-        ) {
-          console.error('Got HTML instead of CSV. Check csvUrl:', csvUrl);
-          return;
-        }
-
         const lines = trimmedText.split(/\r?\n/);
         if (lines.length < 2) return;
 
@@ -225,7 +216,7 @@ export const Dashboard: React.FC = () => {
       ) : (
         <>
           {/* 1. Bundle */}
-          {renderChart('Bundle Units – Actual vs Forecast', [
+          {renderChart('Bundle Units - Actual vs Forecast', [
             { key: 'bundleUnits', name: 'Bundle Units (Actual)', color: '#000000' },
             {
               key: 'bundleForecast',
@@ -242,7 +233,7 @@ export const Dashboard: React.FC = () => {
           ])}
 
           {/* 2. Antecedent */}
-          {renderChart('Antecedent Units – Actual vs Forecast', [
+          {renderChart('Antecedent Units - Actual vs Forecast', [
             { key: 'antecedentUnits', name: 'Antecedent Units (Actual)', color: '#000000' },
             {
               key: 'antecedentForecast',
