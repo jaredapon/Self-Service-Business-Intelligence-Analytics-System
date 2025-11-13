@@ -16,6 +16,10 @@ regression_results/
 ped_output/
 sarima_results/
 
+# Pipeline trigger files
+backend/trigger/complete
+trigger/
+
 
 
 # Python cache files

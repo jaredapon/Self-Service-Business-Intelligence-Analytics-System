@@ -62,6 +62,22 @@ def _staging_delete_prefix_etl(prefix: str) -> None:
     for obj in client.list_objects(settings.minio_staging_bucket, prefix=prefix, recursive=True):
         client.remove_object(settings.minio_staging_bucket, obj.object_name)
 
+def _clear_landing_bucket_etl() -> None:
+    """
+    Delete all files from landing bucket after successful ETL.
+    Removes raw_sales_by_transaction, raw_sales_by_product, and _complete marker.
+    """
+    client = _get_minio_client_for_etl()
+    bucket = settings.minio_landing_bucket
+    
+    print("Cleaning up landing bucket...")
+    deleted_count = 0
+    for obj in client.list_objects(bucket, recursive=True):
+        client.remove_object(bucket, obj.object_name)
+        deleted_count += 1
+    
+    print(f"Deleted {deleted_count} objects from landing bucket: {bucket}")
+
 def _pg_connect_for_etl():
     return psycopg2.connect(
         host=settings.db_host,
@@ -425,7 +441,7 @@ def extract():
     sales_df = pd.concat(sales_dfs, ignore_index=True) if sales_dfs else pd.DataFrame()
 
     if "Date" in sales_df.columns:
-        sales_df["Date"] = pd.to_datetime(sales_df["Date"], errors="coerce")
+        sales_df["Date"] = pd.to_datetime(sales_df["Date"], errors="coerce", dayfirst=False)
 
     # Sales by Product from MinIO
     print(
@@ -438,7 +454,7 @@ def extract():
     prod_ranges = []
     for m, df in zip(prod_files_meta, prod_dfs):
         if "Date" in df.columns:
-            df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+            df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=False)
             valid = df["Date"].dropna()
             if not valid.empty:
                 prod_ranges.append({
@@ -475,9 +491,9 @@ def extract():
     sales_by_product_df = pd.concat(prod_dfs, ignore_index=True) if prod_dfs else pd.DataFrame()
 
     if "Date" in sales_by_product_df.columns:
-        sales_by_product_df["Date"] = pd.to_datetime(sales_by_product_df["Date"], errors="coerce")
+        sales_by_product_df["Date"] = pd.to_datetime(sales_by_product_df["Date"], errors="coerce", dayfirst=False)
     if "Date" in sales_df.columns:
-        sales_df["Date"] = pd.to_datetime(sales_df["Date"], errors="coerce")
+        sales_df["Date"] = pd.to_datetime(sales_df["Date"], errors="coerce", dayfirst=False)
 
     if "Take Out" in sales_by_product_df.columns:
         sales_by_product_df["Take Out"] = sales_by_product_df["Take Out"].apply(
@@ -553,6 +569,19 @@ def transform(sales_df, sales_by_product_df):
                 sales_by_product_df = sales_by_product_df[
                     pd.to_numeric(sales_by_product_df[col], errors="coerce") >= 0
                 ].reset_index(drop=True)
+
+    # Create DateTime columns by combining Date and Time
+    if "Date" in sales_df.columns and "Time" in sales_df.columns:
+        sales_df["DateTime"] = pd.to_datetime(
+            sales_df["Date"].astype(str) + " " + sales_df["Time"].astype(str),
+            errors="coerce"
+        )
+    
+    if "Date" in sales_by_product_df.columns and "Time" in sales_by_product_df.columns:
+        sales_by_product_df["DateTime"] = pd.to_datetime(
+            sales_by_product_df["Date"].astype(str) + " " + sales_by_product_df["Time"].astype(str),
+            errors="coerce"
+        )
 
     # Standardization rules (copied as-is from legacy)
     if "Product ID" in sales_by_product_df.columns and "Product Name" in sales_by_product_df.columns:
@@ -822,9 +851,9 @@ def create_product_dimensions_full(combined_df: pd.DataFrame):
 
     product_columns = ["product_id", "product_name", "Price"]
     available_product_columns = [c for c in product_columns if c in df.columns]
-    if "DateTime" in combined_df.columns:
+    if "DateTime" in df.columns:
         available_product_columns.append("DateTime")
-    if "Date" in df.columns:
+    elif "Date" in df.columns:
         available_product_columns.append("Date")
 
     # Current: latest row per product_id
@@ -1185,7 +1214,7 @@ def load(combined_df: pd.DataFrame):
 
     # fact_transaction_dimension: exclude latest month
     if "Date" in combined_df.columns:
-        combined_df["Date"] = pd.to_datetime(combined_df["Date"], errors="coerce")
+        combined_df["Date"] = pd.to_datetime(combined_df["Date"], errors="coerce", dayfirst=False)
         latest_month = combined_df["Date"].dt.to_period("M").max()
         fact_df = combined_df[combined_df["Date"].dt.to_period("M") != latest_month].reset_index(drop=True)
     else:
@@ -1316,6 +1345,9 @@ def main():
         load(combined_df)
         print(f"Load phase took: {time.time() - t2:.2f} seconds.\n")
 
+        # Clean up landing bucket after successful ETL
+        _clear_landing_bucket_etl()
+        
         print("ETL Process Complete.")
     except Exception as e:
         print(f"ETL Pipeline failed with error: {e}")
