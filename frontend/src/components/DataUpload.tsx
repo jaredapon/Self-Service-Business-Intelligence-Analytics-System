@@ -4,10 +4,12 @@ import {
   MdDelete,
   MdDescription,
   MdTableChart,
-  MdWarning
+  MdWarning,
+  MdCheckCircle
 } from 'react-icons/md';
 import ConfirmationModal from './ConfirmationModal';
 import styles from './DataUpload.module.css';
+import { API_ENDPOINTS } from '../config';
 
 interface FileWithPreview extends File {
   id: string;
@@ -23,7 +25,7 @@ const ACCEPTED_FILE_TYPES = {
 };
 
 const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB
-const MAX_FILES_PER_CATEGORY = 12;
+const MAX_FILES_PER_CATEGORY = 24;
 
 export const DataUpload: React.FC = () => {
   const [rawSalesFiles, setRawSalesFiles] = useState<FileWithPreview[]>([]);
@@ -241,38 +243,80 @@ export const DataUpload: React.FC = () => {
     if (allFiles.length === 0) return;
     
     setIsUploading(true);
+    setErrors([]);
     
     try {
-      // Simulate upload progress for each file
-      for (const file of allFiles) {
+      // Create FormData and append all files
+      const formData = new FormData();
+      
+      // Initialize progress for all files
+      allFiles.forEach(file => {
         setUploadProgress(prev => ({ ...prev, [file.id]: 0 }));
-        
-        // Simulate upload progress
-        for (let progress = 0; progress <= 100; progress += 10) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-          setUploadProgress(prev => ({ ...prev, [file.id]: progress }));
+        formData.append('files', file);
+      });
+
+      // Upload to API with progress tracking
+      const xhr = new XMLHttpRequest();
+
+      // Track upload progress
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          const percentComplete = (e.loaded / e.total) * 100;
+          // Update progress for all files proportionally
+          allFiles.forEach(file => {
+            setUploadProgress(prev => ({ ...prev, [file.id]: Math.round(percentComplete) }));
+          });
         }
-      }
-      
-      // Here you would make actual API calls to upload files
-      console.log('Uploading raw sales files:', rawSalesFiles);
-      console.log('Uploading sales by product files:', salesByProductFiles);
-      
-      // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      });
+
+      // Handle upload completion
+      const uploadPromise = new Promise<void>((resolve, reject) => {
+        xhr.addEventListener('load', () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve();
+          } else {
+            reject(new Error(`Upload failed with status: ${xhr.status}`));
+          }
+        });
+
+        xhr.addEventListener('error', () => {
+          reject(new Error('Network error occurred during upload'));
+        });
+
+        xhr.addEventListener('abort', () => {
+          reject(new Error('Upload was aborted'));
+        });
+      });
+
+      // Send the request
+      xhr.open('POST', API_ENDPOINTS.upload);
+      xhr.send(formData);
+
+      // Wait for completion
+      await uploadPromise;
+
+      // Parse response
+      const response = JSON.parse(xhr.responseText);
+      console.log('Upload successful:', response);
       
       // Reset state after successful upload
       setRawSalesFiles([]);
       setSalesByProductFiles([]);
+      setSelectedRawSalesIds(new Set());
+      setSelectedSalesByProductIds(new Set());
       setUploadProgress({});
       setShowConfirmation(false);
       
-      // Show success message (you can implement a toast notification here)
-      alert('Files uploaded successfully!');
+      // Show success message
+      alert(`✓ Files uploaded successfully!\n\nPipeline has been triggered.\n${response.uploaded_files?.length || allFiles.length} file(s) processed.`);
       
     } catch (error) {
       console.error('Upload failed:', error);
-      setErrors(['Upload failed. Please try again.']);
+      const errorMessage = error instanceof Error ? error.message : 'Upload failed. Please try again.';
+      setErrors([errorMessage]);
+      
+      // Reset progress on error
+      setUploadProgress({});
     } finally {
       setIsUploading(false);
     }

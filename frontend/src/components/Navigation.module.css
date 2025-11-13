@@ -28,6 +28,18 @@
   gap: 1rem;
 }
 
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.logoImage {
+  height: 45px;
+  width: auto;
+  object-fit: contain;
+}
+
 .logo h2 {
   margin: 0;
   color: #2d3748;
