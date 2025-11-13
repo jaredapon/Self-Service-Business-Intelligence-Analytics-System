@@ -9,7 +9,7 @@ import time
 
 # --- Import your actual pipeline scripts ---
 from . import etl
-from . import mba
+# from . import mba
 # from . import ped
 # from . import nlp
 # from . import holtwinters
@@ -27,7 +27,7 @@ def execute_pipeline():
     
     pipeline_steps = [
         ("ETL", etl.main),
-        ("MBA", mba.main),
+        # ("MBA", mba.main),
         # ("PED", ped.main),
         # ("NLP", nlp.main),
         # ("Holt-Winters", holtwinters.main),
