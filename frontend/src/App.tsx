@@ -13,13 +13,6 @@ function App() {
         return <Dashboard />;
       case 'upload':
         return <DataUpload />;
-      case 'settings':
-        return (
-          <div style={{ padding: '2rem' }}>
-            <h1>Settings</h1>
-            <p>Settings page coming soon...</p>
-          </div>
-        );
       default:
         return <Dashboard />;
     }
@@ -30,7 +23,7 @@ function App() {
       <Navigation
         currentPage={currentPage}
         onPageChange={setCurrentPage}
-        userName="Book Latte"
+        userName="BookLatte"
       />
       
       <main className="main-content">

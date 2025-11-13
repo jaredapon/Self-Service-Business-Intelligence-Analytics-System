@@ -14,16 +14,21 @@ body {
 }
 
 .App {
+  display: flex;
   min-height: 100vh;
+  width: 100%;
   background-color: #f8fafc;
+  overflow: hidden;
 }
 
 .main-content {
-  --content-offset: 250px;
+  flex: 1;
   margin-left: 250px;
   margin-top: 60px;
+  width: calc(100vw - 250px);
+  height: calc(100vh - 60px);
   transition: margin-left 0.3s ease-in-out;
-  min-height: calc(100vh - 60px);
+  overflow: auto;
 }
 
 .main-content-collapsed {
@@ -34,7 +39,7 @@ body {
 /* Responsive adjustments */
 @media (max-width: 768px) {
   .main-content {
-    --content-offset: 0px;
     margin-left: 0;
+    width: 100vw;
   }
 }
