@@ -61,7 +61,12 @@ class Settings:
     minio_etl_folder: str = os.getenv("MINIO_ETL_FOLDER", "etl")
     
     # Pipeline Trigger
-    trigger_dir: str = os.getenv("TRIGGER_DIR", "/app/trigger")
+    # Use backend/trigger for local dev, /app/trigger for Docker
+    import pathlib
+    _backend_dir = pathlib.Path(__file__).parent.parent.parent  # Navigate to backend/
+    _default_trigger = str(_backend_dir / "trigger") if not os.path.exists("/app") else "/app/trigger"
+    _trigger_dir_raw: str = os.getenv("TRIGGER_DIR", _default_trigger)
+    trigger_dir: str = os.path.normpath(os.path.abspath(_trigger_dir_raw))  # Normalize and make absolute
 
     # Authentication (Keycloak)
     keycloak_issuer: str = os.getenv("KEYCLOAK_ISSUER", "http://keycloak:8080/realms/booklatte")

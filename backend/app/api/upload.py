@@ -103,8 +103,13 @@ async def handle_file_upload(
         # Ensure the trigger directory exists before writing to it
         os.makedirs(settings.trigger_dir, exist_ok=True)
         trigger_file_path = os.path.join(settings.trigger_dir, "complete")
+        
+        # Write and explicitly flush to ensure file is created before observer checks
         with open(trigger_file_path, "w") as f:
             f.write("trigger")
+            f.flush()
+            os.fsync(f.fileno())  # Force write to disk
+        
         log.info(f"Created local trigger file at: {trigger_file_path}")
 
     except Exception as e:

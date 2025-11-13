@@ -9,28 +9,28 @@ import time
 
 # --- Import your actual pipeline scripts ---
 from . import etl
-# from . import mba
-# from . import ped
-# from . import nlp
-# from . import holtwinters
+from . import mba
+from . import ped
+from . import nlp
+from . import holtwinters
 
 def execute_pipeline():
     """
     Runs the full data processing pipeline in sequence:
     1. ETL (Extract, Transform, Load)
-    # 2. MBA (Market Basket Analysis) - COMMENTED OUT
-    # 3. PED (Price Elasticity of Demand) - COMMENTED OUT
-    # 4. NLP (Non-Linear Programming for Price Optimization) - COMMENTED OUT
-    # 5. Holt-Winters (Forecasting) - COMMENTED OUT
+    2. MBA (Market Basket Analysis)
+    3. PED (Price Elasticity of Demand)
+    4. NLP (Non-Linear Programming for Price Optimization)
+    5. Holt-Winters (Forecasting)
     """
     logger = logging.getLogger(__name__)
     
     pipeline_steps = [
         ("ETL", etl.main),
-        # ("MBA", mba.main),
-        # ("PED", ped.main),
-        # ("NLP", nlp.main),
-        # ("Holt-Winters", holtwinters.main),
+        ("MBA", mba.main),
+        ("PED", ped.main),
+        ("NLP", nlp.main),
+        ("Holt-Winters", holtwinters.main),
     ]
 
     total_start_time = time.time()

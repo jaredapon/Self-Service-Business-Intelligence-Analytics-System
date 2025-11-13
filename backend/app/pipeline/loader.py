@@ -303,3 +303,36 @@ def bulk_load_from_staging(prefix: str, plan: List[Dict[str, Any]]) -> None:
         obj_name = prefix + step["filename"]
         csv_bytes = staging_get_bytes(obj_name)
         copy_csv_bytes_to_table(csv_bytes, step["table"], step["columns"])
+
+
+# =========================
+# EXPORT DATA FROM POSTGRES (for model inputs)
+# =========================
+
+def export_table_to_csv(table_name: str) -> pd.DataFrame:
+    """Export entire table from PostgreSQL to DataFrame."""
+    with _get_pg_conn() as conn:
+        return pd.read_sql(f"SELECT * FROM {table_name}", conn)
+
+
+# =========================
+# RESULT TABLES MANAGEMENT
+# =========================
+
+def clear_result_table(table_name: str) -> None:
+    """Delete all data from a result table."""
+    with _get_pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"DELETE FROM {table_name}")
+        conn.commit()
+
+
+def load_result_csv_to_table(csv_bytes: bytes, table_name: str) -> None:
+    """Load CSV bytes directly into result table (assumes columns match)."""
+    # Read CSV to get column names
+    import io
+    df = pd.read_csv(io.BytesIO(csv_bytes))
+    columns = list(df.columns)
+    
+    # Use COPY to load
+    copy_csv_bytes_to_table(csv_bytes, table_name, columns)

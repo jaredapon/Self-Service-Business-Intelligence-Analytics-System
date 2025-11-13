@@ -62,6 +62,22 @@ def _staging_delete_prefix_etl(prefix: str) -> None:
     for obj in client.list_objects(settings.minio_staging_bucket, prefix=prefix, recursive=True):
         client.remove_object(settings.minio_staging_bucket, obj.object_name)
 
+def _clear_landing_bucket_etl() -> None:
+    """
+    Delete all files from landing bucket after successful ETL.
+    Removes raw_sales_by_transaction, raw_sales_by_product, and _complete marker.
+    """
+    client = _get_minio_client_for_etl()
+    bucket = settings.minio_landing_bucket
+    
+    print("Cleaning up landing bucket...")
+    deleted_count = 0
+    for obj in client.list_objects(bucket, recursive=True):
+        client.remove_object(bucket, obj.object_name)
+        deleted_count += 1
+    
+    print(f"Deleted {deleted_count} objects from landing bucket: {bucket}")
+
 def _pg_connect_for_etl():
     return psycopg2.connect(
         host=settings.db_host,
@@ -1329,6 +1345,9 @@ def main():
         load(combined_df)
         print(f"Load phase took: {time.time() - t2:.2f} seconds.\n")
 
+        # Clean up landing bucket after successful ETL
+        _clear_landing_bucket_etl()
+        
         print("ETL Process Complete.")
     except Exception as e:
         print(f"ETL Pipeline failed with error: {e}")

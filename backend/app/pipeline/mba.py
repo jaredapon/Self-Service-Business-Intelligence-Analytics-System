@@ -1,9 +1,9 @@
 # Market Basket Analysis - Properly Optimized Version
 # Used FP-Growth algorithm to find frequent itemsets and association rules
 
+import os
 import pandas as pd
 from mlxtend.frequent_patterns import fpgrowth, association_rules
-import os
 import time
 
 # --- HELPER FUNCTIONS ---
@@ -236,18 +236,22 @@ def main():
 
     start_time = time.time()
     
-    print("Loading transaction data...")
+    # Import loader to fetch data from PostgreSQL
+    from . import loader
+    
+    print("Loading transaction data from PostgreSQL...")
     try:
-        df = pd.read_csv('etl_dimensions/transaction_records.csv')
-    except FileNotFoundError:
-        print("Error: transaction_records.csv not found.")
+        df = loader.export_table_to_csv('transaction_records')
+    except Exception as e:
+        print(f"Error loading transaction_records: {e}")
         return
 
-    print("Loading product dimension...")
+    print("Loading product dimension from PostgreSQL...")
     try:
-        prod_dim = pd.read_csv('etl_dimensions/current_product_dimension.csv', dtype={'product_id': str})
-    except FileNotFoundError:
-        print("Error: current_product_dimension.csv not found.")
+        prod_dim = loader.export_table_to_csv('current_product_dimension')
+        prod_dim['product_id'] = prod_dim['product_id'].astype(str)
+    except Exception as e:
+        print(f"Error loading current_product_dimension: {e}")
         return
 
     # Create lookup dictionaries (OPTIMIZED: done once)
@@ -270,35 +274,53 @@ def main():
 
     # Map SKUs to product_ids
     print("Mapping SKUs to product_ids...")
-    df['product_ids'] = df['SKU'].apply(lambda x: map_skus_to_product_ids(x, sku_to_product_id))
+    sku_col = 'sku' if 'sku' in df.columns else 'SKU'
+    df['product_ids'] = df[sku_col].apply(lambda x: map_skus_to_product_ids(x, sku_to_product_id))
 
-    # Get category sets
+    # Get category sets (handle both uppercase CATEGORY and lowercase category)
+    category_col = 'category' if 'category' in prod_dim.columns else 'CATEGORY'
     excluded_cats = {'EXTRA', 'OTHERS'}
-    excluded_tokens = set(prod_dim[prod_dim['CATEGORY'].isin(excluded_cats)]['product_id'].astype(str).str.strip())
-    food_ids = set(prod_dim[prod_dim['CATEGORY'] == 'FOOD']['product_id'].astype(str).str.strip())
-    drink_ids = set(prod_dim[prod_dim['CATEGORY'] == 'DRINK']['product_id'].astype(str).str.strip())
+    excluded_tokens = set(prod_dim[prod_dim[category_col].isin(excluded_cats)]['product_id'].astype(str).str.strip())
+    food_ids = set(prod_dim[prod_dim[category_col] == 'FOOD']['product_id'].astype(str).str.strip())
+    drink_ids = set(prod_dim[prod_dim[category_col] == 'DRINK']['product_id'].astype(str).str.strip())
 
     print(f"Excluding {len(excluded_tokens)} product_ids from categories: {excluded_cats}")
     
     # --- Run Main Analysis ---
-    output_folder = 'mba_output'
-    os.makedirs(output_folder, exist_ok=True)
     all_rules = pd.DataFrame()
     
     # Get category-specific ID sets
-    food_cat_ids = set(prod_dim[prod_dim['CATEGORY'] == 'FOOD']['product_id'].astype(str).str.strip())
-    drink_cat_ids = set(prod_dim[prod_dim['CATEGORY'] == 'DRINK']['product_id'].astype(str).str.strip())
+    food_cat_ids = set(prod_dim[prod_dim[category_col] == 'FOOD']['product_id'].astype(str).str.strip())
+    drink_cat_ids = set(prod_dim[prod_dim[category_col] == 'DRINK']['product_id'].astype(str).str.strip())
     
     # Run analysis
     all_rules = run_mba_for_category(df, 'FOOD', food_cat_ids, id_to_name, all_rules)
     all_rules = run_mba_for_category(df, 'DRINK', drink_cat_ids, id_to_name, all_rules)
     all_rules = run_mba_for_meal(df, food_ids, drink_ids, id_to_name, all_rules)
 
-    # Save results (will be in snake_case)
-    association_rules_csv_path = os.path.join(output_folder, 'association_rules.csv')
-    all_rules.to_csv(association_rules_csv_path, index=False)
-
-    print(f"\nResults exported successfully to {output_folder}")
+    # Convert column names to snake_case
+    all_rules.columns = [col.replace(' ', '_').lower() for col in all_rules.columns]
+    
+    # Upload to MinIO staging and PostgreSQL
+    print("\nUploading results to MinIO and PostgreSQL...")
+    csv_bytes = all_rules.to_csv(index=False).encode('utf-8')
+    
+    # Upload to MinIO
+    import time as tm
+    run_id = tm.strftime("%Y%m%d_%H%M%S")
+    from app.core.config import settings
+    minio_path = f"models/mba/{run_id}/association_rules.csv"
+    loader.staging_put_bytes(minio_path, csv_bytes)
+    print(f"Uploaded to MinIO: {minio_path}")
+    
+    # Clear and load to PostgreSQL
+    loader.clear_result_table('association_rules')
+    loader.load_result_csv_to_table(csv_bytes, 'association_rules')
+    print("Loaded to PostgreSQL: association_rules")
+    
+    # Clean up MinIO staging after successful load
+    loader.staging_delete_prefix(f"models/mba/{run_id}")
+    print(f"Cleaned up MinIO staging: models/mba/{run_id}")
     
     # --- Print Total Time ---
     end_time = time.time()
