@@ -8,11 +8,8 @@ from sklearn.metrics import mean_squared_error, r2_score
 import sys
 import os
 
-rules_files = [
-    ('mba_meal/association_rules.csv', 'Meal'),
-    ('mba_foods/association_rules.csv', 'Foods'),
-    ('mba_drinks/association_rules.csv', 'Drinks')
-]
+# Only one association rule file from mba_output
+rules_file = ('mba_output/association_rules.csv', 'Output')
 
 try:
     fact_df = pd.read_csv('etl_dimensions/fact_transaction_dimension.csv')
@@ -21,16 +18,16 @@ except Exception as e:
     print(f"Error loading data: {e}")
     sys.exit()
 
-for file_path, label in rules_files:
-    try:
-        rules_df = pd.read_csv(file_path)
-        bundle_index = 0
-        bundle = rules_df.iloc[bundle_index]
-        product_a_name = bundle['antecedents_names']
-        product_b_name = bundle['consequents_names']
-    except Exception as e:
-        print(f"Error loading association rules from {file_path}: {e}")
-        continue
+file_path, label = rules_file
+try:
+    rules_df = pd.read_csv(file_path)
+except Exception as e:
+    print(f"Error loading association rules from {file_path}: {e}")
+    sys.exit()
+
+for bundle_index, bundle in rules_df.iterrows():
+    product_a_name = bundle['antecedents_names']
+    product_b_name = bundle['consequents_names']
 
     product_a_match = product_df[product_df['product_name'] == product_a_name]
     product_b_match = product_df[product_df['product_name'] == product_b_name]
@@ -66,7 +63,7 @@ for file_path, label in rules_files:
         Num_Transactions=('Date', 'count')
     ).reset_index().sort_values('Combined_AB_Price')
 
-    print(f"\n--- {label} Top Bundle: {product_a_name} + {product_b_name} ---")
+    print(f"\n--- {label} Bundle {bundle_index}: {product_a_name} + {product_b_name} ---")
     if len(demand_summary) > 1:
         X = demand_summary[['Combined_AB_Price']]
         y = demand_summary['Num_Transactions']
@@ -89,12 +86,22 @@ for file_path, label in rules_files:
         mse = mean_squared_error(y, y_pred)
         rmse = np.sqrt(mse)
         r2 = r2_score(y, y_pred)
+        mae = np.mean(np.abs(y - y_pred))
         wmape = np.sum(np.abs(y - y_pred)) / np.sum(y) * 100
+        if len(y) > 1:
+            naive_errors = np.abs(y.values[1:] - y.values[:-1])
+            mase_denom = np.mean(naive_errors) if np.mean(naive_errors) != 0 else np.nan
+            mase = mae / mase_denom if mase_denom else np.nan
+        else:
+            mase = np.nan
+
         print(f"Model Evaluation for degree {best_degree}:")
         print(f"  R²: {r2:.4f}")
-        print(f"  MSE: {mse:.4f}")
-        print(f"  RMSE: {rmse:.4f}")
-        print(f"  WMAPE: {wmape:.4f}")
+        print(f"  Mean Squared Error (MSE):       {mse:.4f}")
+        print(f"  Root Mean Squared Error (RMSE): {rmse:.4f}")
+        print(f"  Mean Absolute Error (MAE):      {mae:.4f}")
+        print(f"  Weighted MAPE (WMAPE):          {wmape:.2f}%")
+        print(f"  Mean Absolute Scaled Error (MASE): {mase:.4f}")
 
         min_price = demand_summary['Combined_AB_Price'].min()
         max_price = demand_summary['Combined_AB_Price'].max()

@@ -118,13 +118,19 @@ def evaluate_sarima(series: pd.Series, order, seasonal_order, label: str):
         mae = np.mean(np.abs(residuals))
         wmape = np.sum(np.abs(residuals)) / np.sum(np.abs(actual_vals)
                                                    ) * 100 if np.sum(actual_vals) != 0 else np.nan
-
+        if len(actual_vals) > 1:
+            naive_errors = np.abs(actual_vals[1:] - actual_vals[:-1])
+            mase_denom = np.mean(naive_errors) if np.mean(naive_errors) != 0 else np.nan
+            mase = mae / mase_denom if mase_denom else np.nan
+        else:
+            mase = np.nan
         print(f"\n{label}:")
         print(f"MAE:  {mae:.3f}")
         print(f"MSE:  {mse:.3f}")
         print(f"RMSE: {rmse:.3f}")
         print(f"MAPE: {wmape:.2f}%")
-
+        print(f"MASE: {mase:.4f}")
+        
     except Exception as e:
         print(f"[{label}] Evaluation failed: {e}")
 

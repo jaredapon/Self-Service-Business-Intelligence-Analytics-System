@@ -15,6 +15,7 @@ PRODUCT_PATH      = 'etl_dimensions/current_product_dimension.csv'
 PED_SUMMARY_PATH  = PARENT_DIR + '/ped_output/ped_summary.csv'
 NLP_OPT_PATH      = PARENT_DIR + '/nlp_output/nlp_optimization_results.csv'
 OUTPUT_DIR        = 'sarima_results'
+BUNDLE_ROW = 0
 
 AGG_FREQ = 'QE'            # Quarterly
 SEASONAL_PERIODS = 4       # Quarterly seasonality
@@ -472,11 +473,20 @@ def evaluate_sarima(series: pd.Series, order, seasonal_order, label: str):
         ss_res = np.sum(residuals ** 2)
         ss_tot = np.sum((actual_vals - np.mean(actual_vals)) ** 2)
 
+        # MASE calculation
+        if len(actual_vals) > 1:
+            naive_errors = np.abs(actual_vals[1:] - actual_vals[:-1])
+            mase_denom = np.mean(naive_errors) if np.mean(naive_errors) != 0 else np.nan
+            mase = mae / mase_denom if mase_denom else np.nan
+        else:
+            mase = np.nan
+
         print(f"\n[{label}]")
         print(f"  Mean Squared Error (MSE):       {mse:.4f}")
         print(f"  Root Mean Squared Error (RMSE): {rmse:.4f}")
         print(f"  Mean Absolute Error (MAE):      {mae:.4f}")
         print(f"  Weighted MAPE (WMAPE):          {wmape:.2f}%")
+        print(f"  Mean Absolute Scaled Error (MASE): {mase:.4f}")
 
     except Exception as e:
         print(f"[{label}] Evaluation failed: {e}")
