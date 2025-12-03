@@ -23,9 +23,9 @@ HORIZON = 4                # Forecast 4 periods ahead
 
 # Holt-Winters parameters
 OPTIMIZED = False
-HW_ALPHA = 0.2
-HW_BETA  = 0.2
-HW_GAMMA = 0.2
+HW_ALPHA  = 0.2
+HW_BETA   = 0.2
+HW_GAMMA  = 0.2
 
 # Price scenario (fallback)
 DISCOUNT_RATE = 0.05
@@ -56,16 +56,19 @@ def fit_and_forecast_to_index(series: pd.Series, label: str, idx: pd.DatetimeInd
     if series is None or series.empty:
         return pd.Series(0.0, index=idx)
     model = ExponentialSmoothing(
-        series, trend='add', seasonal='add',
-        seasonal_periods=SEASONAL_PERIODS, initialization_method="estimated"
+        series,
+        trend='add',
+        seasonal='add',
+        seasonal_periods=SEASONAL_PERIODS,
+        initialization_method="estimated"
     )
     if OPTIMIZED:
         fitted = model.fit(optimized=True)
     else:
         fitted = model.fit(
-            smoothing_level=HW_ALPHA,
-            smoothing_trend=HW_BETA,
-            smoothing_seasonal=HW_GAMMA,
+            smoothing_level   = HW_ALPHA,
+            smoothing_trend   = HW_BETA,
+            smoothing_seasonal= HW_GAMMA,
             optimized=False
         )
     fc = fitted.forecast(len(idx))
@@ -78,6 +81,79 @@ def build_ts_all(lines: pd.DataFrame, AGG_FREQ: str) -> pd.Series:
     rec = lines.groupby('Receipt No').agg(Date=('Date', 'first'))
     rec['Date'] = pd.to_datetime(rec['Date'], errors='coerce')
     return rec.groupby(pd.Grouper(key='Date', freq=AGG_FREQ)).size()
+
+def evaluate_holtwinters(series: pd.Series, label: str):
+    """
+    Fit Holt-Winters in-sample and compute accuracy metrics including MASE.
+
+    MASE here uses a seasonal naïve baseline:
+        naive forecast: y_t_hat = y_{t-m}, where m = SEASONAL_PERIODS.
+    """
+    try:
+        if series is None or series.empty:
+            print(f"[{label}] Skipped — no data.")
+            return
+
+        # Fit the same HW configuration used for forecasting
+        model = ExponentialSmoothing(
+            series,
+            trend='add',
+            seasonal='add',
+            seasonal_periods=SEASONAL_PERIODS,
+            initialization_method="estimated"
+        )
+
+        if OPTIMIZED:
+            fitted = model.fit(optimized=True)
+        else:
+            fitted = model.fit(
+                smoothing_level   = HW_ALPHA,
+                smoothing_trend   = HW_BETA,
+                smoothing_seasonal= HW_GAMMA,
+                optimized=False
+            )
+
+        actual_vals = series.values
+        fitted_vals = fitted.fittedvalues.values
+
+        # Align lengths if statsmodels drops initial points
+        if len(fitted_vals) < len(actual_vals):
+            fitted_vals = np.pad(
+                fitted_vals,
+                (len(actual_vals) - len(fitted_vals), 0),
+                mode="edge"
+            )
+
+        residuals = actual_vals - fitted_vals
+        mae = np.mean(np.abs(residuals))
+        mse = np.mean(residuals ** 2)
+        rmse = np.sqrt(mse)
+
+        wmape = (
+            np.sum(np.abs(residuals)) / np.sum(np.abs(actual_vals)) * 100
+            if np.sum(actual_vals) != 0 else np.nan
+        )
+
+        # Seasonal naive baseline for quarterly data (m = 4)
+        m = SEASONAL_PERIODS if SEASONAL_PERIODS > 1 else 1
+
+        if len(actual_vals) > m:
+            naive_errors = np.abs(actual_vals[m:] - actual_vals[:-m])
+            scale = np.mean(naive_errors)
+            mase = mae / scale if scale != 0 else np.nan
+        else:
+            mase = np.nan
+
+        print(f"\n{label}:")
+        print(f"MAE:  {mae:.3f}")
+        print(f"MSE:  {mse:.3f}")
+        print(f"RMSE: {rmse:.3f}")
+        print(f"MAPE: {wmape:.2f}%")
+        print(f"MASE: {mase:.4f}")
+
+    except Exception as e:
+        print(f"[{label}] Evaluation failed: {e}")
+
 
 # =========================
 # LOAD DATA
@@ -104,8 +180,8 @@ for idx, rule_row in rules_df.iterrows():
     try:
         product_a_name = str(rule_row['antecedents_names'])
         product_b_name = str(rule_row['consequents_names'])
-        bundle_id = rule_row['bundle_id'] if 'bundle_id' in rule_row else ""
-        category  = rule_row['category'] if 'category' in rule_row else ""
+        bundle_id      = rule_row['bundle_id'] if 'bundle_id' in rule_row else ""
+        category       = rule_row['category']  if 'category'  in rule_row else ""
 
         print(f"\n==============================")
         print(f"Processing bundle row {idx}: {product_a_name} + {product_b_name}")
@@ -124,7 +200,9 @@ for idx, rule_row in rules_df.iterrows():
         n_points  = int(ped_row.get('n_price_points', 0) or 0)
 
         pair_transactions = fact_df[fact_df['Product ID'].astype(str).isin([product_a_id, product_b_id])]
-        receipt_products = pair_transactions.groupby('Receipt No')['Product ID'].apply(lambda s: set(s.astype(str)))
+        receipt_products = pair_transactions.groupby('Receipt No')['Product ID'].apply(
+            lambda s: set(s.astype(str))
+        )
         receipts_with_both = receipt_products[
             receipt_products.apply(lambda s: (product_a_id in s) and (product_b_id in s))
         ].index
@@ -147,10 +225,16 @@ for idx, rule_row in rules_df.iterrows():
             continue
 
         current_price_a = float(
-            product_df.loc[product_df['product_id'].astype(str) == str(product_a_id), 'Price'].iloc[0]
+            product_df.loc[
+                product_df['product_id'].astype(str) == str(product_a_id),
+                'Price'
+            ].iloc[0]
         )
         current_price_b = float(
-            product_df.loc[product_df['product_id'].astype(str) == str(product_b_id), 'Price'].iloc[0]
+            product_df.loc[
+                product_df['product_id'].astype(str) == str(product_b_id),
+                'Price'
+            ].iloc[0]
         )
         current_price = current_price_a + current_price_b
 
@@ -184,60 +268,73 @@ for idx, rule_row in rules_df.iterrows():
             last_index_or_min(a_ts_all),
             last_index_or_min(b_ts_all)
         ])
-        COMMON_FC_INDEX = pd.date_range(start=latest_actual + step, periods=HORIZON, freq=AGG_FREQ)
+        COMMON_FC_INDEX = pd.date_range(
+            start=latest_actual + step,
+            periods=HORIZON,
+            freq=AGG_FREQ
+        )
 
         bundle_fc_raw = fit_and_forecast_to_index(bundle_sales_ts, "Bundle", COMMON_FC_INDEX)
-        a_fc_all_raw = fit_and_forecast_to_index(a_ts_all, f"{product_a_name}", COMMON_FC_INDEX)
-        b_fc_all_raw = fit_and_forecast_to_index(b_ts_all, f"{product_b_name}", COMMON_FC_INDEX)
+        a_fc_all_raw  = fit_and_forecast_to_index(a_ts_all,       f"{product_a_name}", COMMON_FC_INDEX)
+        b_fc_all_raw  = fit_and_forecast_to_index(b_ts_all,       f"{product_b_name}", COMMON_FC_INDEX)
 
-        bundle_fc = bundle_fc_raw.clip(lower=0)
+        bundle_fc     = bundle_fc_raw.clip(lower=0)
         bundle_fc_adj = (bundle_fc_raw * demand_multiplier).clip(lower=0)
-        a_fc_all = a_fc_all_raw.clip(lower=0)
-        b_fc_all = b_fc_all_raw.clip(lower=0)
+        a_fc_all      = a_fc_all_raw.clip(lower=0)
+        b_fc_all      = b_fc_all_raw.clip(lower=0)
 
-        cannibalization_units = bundle_fc
-        a_fc_after_aligned = (a_fc_all - cannibalization_units).clip(lower=0)
-        b_fc_after_aligned = (b_fc_all - cannibalization_units).clip(lower=0)
+        cannibalization_units   = bundle_fc
+        a_fc_after_aligned      = (a_fc_all - cannibalization_units).clip(lower=0)
+        b_fc_after_aligned      = (b_fc_all - cannibalization_units).clip(lower=0)
 
         def revenue_forecast(series, price):
             return series * price
 
         price_a, price_b = current_price_a, current_price_b
 
-        rev_a_before = revenue_forecast(a_fc_all, price_a)
-        rev_b_before = revenue_forecast(b_fc_all, price_b)
-        rev_a_after  = revenue_forecast(a_fc_after_aligned, price_a)
-        rev_b_after  = revenue_forecast(b_fc_after_aligned, price_b)
-        rev_bundle_after = bundle_fc_adj * new_price
+        rev_a_before    = revenue_forecast(a_fc_all,            price_a)
+        rev_b_before    = revenue_forecast(b_fc_all,            price_b)
+        rev_a_after     = revenue_forecast(a_fc_after_aligned,  price_a)
+        rev_b_after     = revenue_forecast(b_fc_after_aligned,  price_b)
+        rev_bundle_after= bundle_fc_adj * new_price
 
-        overall_before = rev_a_before.sum() + rev_b_before.sum()
-        overall_after  = rev_a_after.sum() + rev_b_after.sum() + rev_bundle_after.sum()
-        impact_abs = overall_after - overall_before
-        impact_pct = (impact_abs / overall_before * 100.0) if overall_before != 0 else np.nan
+        overall_before  = rev_a_before.sum() + rev_b_before.sum()
+        overall_after   = rev_a_after.sum() + rev_b_after.sum() + rev_bundle_after.sum()
+        impact_abs      = overall_after - overall_before
+        impact_pct      = (impact_abs / overall_before * 100.0) if overall_before != 0 else np.nan
 
         df_points = pd.DataFrame({
-            'Bundle_Units': bundle_sales_ts,
-            'Antecedent_Units': a_ts_all,
-            'Consequent_Units': b_ts_all
+            'Bundle_Units':      bundle_sales_ts,
+            'Antecedent_Units':  a_ts_all,
+            'Consequent_Units':  b_ts_all
         })
         df_forecast = pd.DataFrame({
-            'Bundle_Units_Forecast': bundle_fc,
-            'Bundle_Units_Adjusted_Forecast': bundle_fc_adj,
-            'Antecedent_Units_Forecast': a_fc_all,
-            'Antecedent_Units_After_Cannibalization': a_fc_after_aligned,
-            'Consequent_Units_Forecast': b_fc_all,
-            'Consequent_Units_After_Cannibalization': b_fc_after_aligned
+            'Bundle_Units_Forecast':                 bundle_fc,
+            'Bundle_Units_Adjusted_Forecast':        bundle_fc_adj,
+            'Antecedent_Units_Forecast':             a_fc_all,
+            'Antecedent_Units_After_Cannibalization':a_fc_after_aligned,
+            'Consequent_Units_Forecast':             b_fc_all,
+            'Consequent_Units_After_Cannibalization':b_fc_after_aligned
         })
         df_all = pd.concat([df_points, df_forecast], axis=0)
         df_all.index.name = 'Date'
         df_all['bundle_row'] = idx
-        df_all['bundle_id'] = bundle_id
-        df_all['category']  = category
+        df_all['bundle_id']  = bundle_id
+        df_all['category']   = category
 
         all_results.append(df_all)
 
+        # =========================
+        # MODEL EVALUATION (with MASE)
+        # =========================
+        print("\n  Holt-Winters Model Evaluation Metrics:")
+        evaluate_holtwinters(a_ts_all,      f"{product_a_name} (Individual Item)")
+        evaluate_holtwinters(b_ts_all,      f"{product_b_name} (Individual Item)")
+        evaluate_holtwinters(bundle_sales_ts,
+                             f"Bundle ({product_a_name} + {product_b_name})")
+
         print(
-            f"Original Price: {current_price:.2f} | "
+            f"\nOriginal Price: {current_price:.2f} | "
             f"Recommended Price: {new_price:.2f} | "
             f"Impact: {impact_abs:.2f} ({impact_pct:.1f}%)"
         )
