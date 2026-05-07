@@ -148,7 +148,7 @@ def evaluate_holtwinters(series: pd.Series, label: str):
         print(f"MAE:  {mae:.3f}")
         print(f"MSE:  {mse:.3f}")
         print(f"RMSE: {rmse:.3f}")
-        print(f"MAPE: {wmape:.2f}%")
+        print(f"WMAPE: {wmape:.2f}%")
         print(f"MASE: {mase:.4f}")
 
     except Exception as e:
